@@ -1,0 +1,19 @@
+# Compiled binaries
+SketchApp
+SketchApp.exe
+ide
+ide.exe
+MyApp
+MyApp.exe
+
+# Build artifacts
+*.o
+*.obj
+*.a
+*.lib
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db

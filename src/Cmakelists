@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.16)
+project(ProcessingCPP)
+set(CMAKE_CXX_STANDARD 17)
+
+find_package(OpenGL REQUIRED)
+find_package(GLEW   REQUIRED)
+find_package(glfw3  REQUIRED)
+
+add_executable(sketch
+    src/main.cpp
+    src/Processing.cpp
+    src/MySketch.cpp
+)
+
+target_include_directories(sketch PRIVATE src)
+
+target_link_libraries(sketch
+    OpenGL::GL
+    OpenGL::GLU      # needed for gluLookAt / gluPerspective
+    GLEW::GLEW
+    glfw
+)
