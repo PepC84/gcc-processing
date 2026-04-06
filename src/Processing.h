@@ -214,8 +214,13 @@ extern float mouseX,mouseY,pmouseX,pmouseY;
 extern bool  isMousePressed;
 extern int   mouseButton;
 
-// Java-style event callbacks — define these in your sketch exactly as in Processing Java
-// They are auto-wired in run() after setup() is called.
+// Java-style event callbacks — define any of these in your sketch.
+// On Linux/macOS: weak symbols let them be optional (sketch may omit them).
+// On Windows (MinGW): weak symbols aren't supported, so we provide empty
+// default implementations here; the sketch's definitions override them via
+// the function pointer wiring in run().
+#if defined(__GNUC__) && !defined(_WIN32)
+// Linux / macOS — true weak symbols
 void keyPressed()          __attribute__((weak));
 void keyReleased()         __attribute__((weak));
 void keyTyped()            __attribute__((weak));
@@ -227,6 +232,20 @@ void mouseDragged()        __attribute__((weak));
 void mouseWheel(int delta) __attribute__((weak));
 void windowMoved()         __attribute__((weak));
 void windowResized()       __attribute__((weak));
+#else
+// Windows (MinGW) — provide empty default bodies; sketch overrides via pointers
+inline void keyPressed()          {}
+inline void keyReleased()         {}
+inline void keyTyped()            {}
+inline void mousePressed()        {}
+inline void mouseReleased()       {}
+inline void mouseClicked()        {}
+inline void mouseMoved()          {}
+inline void mouseDragged()        {}
+inline void mouseWheel(int /*d*/) {}
+inline void windowMoved()         {}
+inline void windowResized()       {}
+#endif
 
 // =============================================================================
 // KEYBOARD

@@ -1398,20 +1398,36 @@ void run(){
 
     setup();
 
-    // Auto-wire Java-style event functions if the sketch defines them.
-    // Uses weak symbols — if the function is not defined in the sketch,
-    // the weak stub resolves to nullptr and the check safely skips it.
-    if((void*)::Processing::keyPressed != nullptr)   _onKeyPressed   = ::Processing::keyPressed;
-    if((void*)::Processing::keyReleased  != nullptr) _onKeyReleased  = ::Processing::keyReleased;
-    if((void*)::Processing::keyTyped     != nullptr) _onKeyTyped     = ::Processing::keyTyped;
-    if((void*)::Processing::mousePressed != nullptr) _onMousePressed = ::Processing::mousePressed;
-    if((void*)::Processing::mouseReleased!= nullptr) _onMouseReleased= ::Processing::mouseReleased;
-    if((void*)::Processing::mouseClicked != nullptr) _onMouseClicked = ::Processing::mouseClicked;
-    if((void*)::Processing::mouseMoved   != nullptr) _onMouseMoved   = ::Processing::mouseMoved;
-    if((void*)::Processing::mouseDragged != nullptr) _onMouseDragged = ::Processing::mouseDragged;
-    if((void*)::Processing::mouseWheel   != nullptr) _onMouseWheel   = ::Processing::mouseWheel;
-    if((void*)::Processing::windowMoved  != nullptr) _onWindowMoved  = ::Processing::windowMoved;
-    if((void*)::Processing::windowResized!= nullptr) _onWindowResized= ::Processing::windowResized;
+    // Auto-wire Java-style event callbacks.
+    // On Linux/macOS: weak symbol nullptr check skips unimplemented callbacks.
+    // On Windows: inline stubs are always non-null, so we always wire them —
+    //             the inline empty body is harmless when the sketch doesn't define them.
+#if defined(__GNUC__) && !defined(_WIN32)
+    if((void*)::Processing::keyPressed  != nullptr) _onKeyPressed   = ::Processing::keyPressed;
+    if((void*)::Processing::keyReleased != nullptr) _onKeyReleased  = ::Processing::keyReleased;
+    if((void*)::Processing::keyTyped    != nullptr) _onKeyTyped     = ::Processing::keyTyped;
+    if((void*)::Processing::mousePressed!= nullptr) _onMousePressed = ::Processing::mousePressed;
+    if((void*)::Processing::mouseReleased!=nullptr) _onMouseReleased= ::Processing::mouseReleased;
+    if((void*)::Processing::mouseClicked!= nullptr) _onMouseClicked = ::Processing::mouseClicked;
+    if((void*)::Processing::mouseMoved  != nullptr) _onMouseMoved   = ::Processing::mouseMoved;
+    if((void*)::Processing::mouseDragged!= nullptr) _onMouseDragged = ::Processing::mouseDragged;
+    if((void*)::Processing::mouseWheel  != nullptr) _onMouseWheel   = ::Processing::mouseWheel;
+    if((void*)::Processing::windowMoved != nullptr) _onWindowMoved  = ::Processing::windowMoved;
+    if((void*)::Processing::windowResized!=nullptr) _onWindowResized= ::Processing::windowResized;
+#else
+    // Windows: always wire (inline stubs are no-ops when sketch doesn't define them)
+    _onKeyPressed    = ::Processing::keyPressed;
+    _onKeyReleased   = ::Processing::keyReleased;
+    _onKeyTyped      = ::Processing::keyTyped;
+    _onMousePressed  = ::Processing::mousePressed;
+    _onMouseReleased = ::Processing::mouseReleased;
+    _onMouseClicked  = ::Processing::mouseClicked;
+    _onMouseMoved    = ::Processing::mouseMoved;
+    _onMouseDragged  = ::Processing::mouseDragged;
+    _onMouseWheel    = ::Processing::mouseWheel;
+    _onWindowMoved   = ::Processing::windowMoved;
+    _onWindowResized = ::Processing::windowResized;
+#endif
 
     redrawOnce=true;
     auto last=std::chrono::steady_clock::now();
