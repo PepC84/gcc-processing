@@ -1337,6 +1337,9 @@ static void fbsize_cb(GLFWwindow*,int fw,int fh){
 static bool tryLoadTTF(const std::string& path, float size); // forward decl
 
 void run(){
+    // Make stdout fully unbuffered so print()/println() appear immediately
+    // in the IDE console when running via pipe capture
+    setvbuf(stdout, nullptr, _IONBF, 0);
     std::srand((unsigned)std::time(nullptr));
     buildNoisePerm(0);
 
@@ -1702,7 +1705,7 @@ static bool tryLoadTTF(const std::string& path, float size) {
         g_ttf.loaded = true;
         g_textSize   = size;
         bakeAtlas(size);
-        std::cout << "[font] loaded: " << path << " @ " << size << "px\n";
+        // font load success — silent (stderr only for failures)
         return true;
     }
     std::cerr << "[font] failed to load: " << path << "\n";

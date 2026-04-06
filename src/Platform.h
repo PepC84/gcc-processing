@@ -64,7 +64,9 @@
    inline void globfree(glob_t*){}
 #endif  // _GLOB_H
 
-// dirent.h — provided natively by MinGW/MSYS2, no stub needed
+// dirent.h — provided natively by MinGW/MSYS2
+#include <dirent.h>
+#include <sys/stat.h>
 
 #include <windows.h>
 #include <commdlg.h>   // GetOpenFileName / GetSaveFileName
@@ -133,23 +135,8 @@ inline void plat_open_folder(const std::string& path) {
     ShellExecuteA(NULL, "open", path.c_str(), NULL, NULL, SW_SHOW);
 }
 
-// ── File dialog ────────────────────────────────────────────────────────────
-inline std::string plat_folder_dialog(const std::string& current = ".") {
-    std::string cmd = "zenity --file-selection --directory"
-                      " --title=\"Open Folder\""
-                      " --filename=\"" + current + "\" 2>/dev/null";
-    FILE* p = popen(cmd.c_str(), "r");
-    if (!p) return "";
-    char buf[1024] = {};
-    if (fgets(buf, sizeof(buf), p)) {}
-    pclose(p);
-    std::string r = buf;
-    while (!r.empty() && (r.back() == '\n' || r.back() == '\r')) r.pop_back();
-    return r;
-}
-
-inline std::string plat_folder_dialog(const std::string& current = ".") {
-    // Use SHBrowseForFolder on Windows
+// ── File dialog ───────────────────────────────────────────────────────────
+inline std::string plat_folder_dialog(const std::string& /*current*/ = ".") {
     BROWSEINFOA bi = {};
     bi.lpszTitle = "Select Project Folder";
     bi.ulFlags   = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
