@@ -197,14 +197,17 @@ if [[ $WIN -eq 1 ]]; then
     LD="-lglfw3 -lglew32 -lopengl32 -lglu32 -lcomdlg32 -lshell32 -lole32 -luuid -mwindows -pthread -D_USE_MATH_DEFINES"
     IDE_OUT="ide.exe"
     SKETCH_EXT=".exe"
+    DEFAULTS="src/Processing_defaults.cpp"  # Windows weak-symbol fallbacks
 elif [[ $PLAT == macos ]]; then
     LD="-lglfw -lGLEW -framework OpenGL -framework Cocoa -framework IOKit -lm"
     IDE_OUT="ide"
     SKETCH_EXT=""
+    DEFAULTS=""
 else
     LD="-lglfw -lGLEW -lGL -lGLU -lm -pthread"
     IDE_OUT="ide"
     SKETCH_EXT=""
+    DEFAULTS=""
 fi
 
 # ── buildIDE.sh ───────────────────────────────────────────────────────────
@@ -217,6 +220,7 @@ echo "[build] Compiling IDE..."
 g++ -std=c++17 \\
     src/Processing.cpp \\
     src/IDE.cpp \\
+    $DEFAULTS \\
     src/main.cpp \\
     -o $IDE_OUT \\
     $LD
@@ -238,6 +242,7 @@ echo "[build] \$SKETCH → \$OUT${SKETCH_EXT}"
 g++ -std=c++17 \\
     src/Processing.cpp \\
     "\$SKETCH" \\
+    $DEFAULTS \\
     src/main.cpp \\
     -o "\${OUT}${SKETCH_EXT}" \\
     $LD

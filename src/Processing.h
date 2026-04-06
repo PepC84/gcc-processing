@@ -220,7 +220,8 @@ extern int   mouseButton;
 // default implementations here; the sketch's definitions override them via
 // the function pointer wiring in run().
 #if defined(__GNUC__) && !defined(_WIN32)
-// Linux / macOS — true weak symbols
+// ── Linux / macOS: true weak symbols ──────────────────────────────────────
+// Unimplemented callbacks resolve to nullptr and are safely skipped in run().
 void keyPressed()          __attribute__((weak));
 void keyReleased()         __attribute__((weak));
 void keyTyped()            __attribute__((weak));
@@ -233,18 +234,23 @@ void mouseWheel(int delta) __attribute__((weak));
 void windowMoved()         __attribute__((weak));
 void windowResized()       __attribute__((weak));
 #else
-// Windows (MinGW) — provide empty default bodies; sketch overrides via pointers
-inline void keyPressed()          {}
-inline void keyReleased()         {}
-inline void keyTyped()            {}
-inline void mousePressed()        {}
-inline void mouseReleased()       {}
-inline void mouseClicked()        {}
-inline void mouseMoved()          {}
-inline void mouseDragged()        {}
-inline void mouseWheel(int /*d*/) {}
-inline void windowMoved()         {}
-inline void windowResized()       {}
+// ── Windows (MinGW): no weak symbol support ────────────────────────────────
+// Declare the callbacks as regular forward declarations.
+// - The IDE (IDE.cpp) defines all of them fully.
+// - User sketches define whichever ones they need.
+// - Any that are left undefined get a default empty body from
+//   src/Processing_defaults.cpp which is compiled into every binary.
+void keyPressed();
+void keyReleased();
+void keyTyped();
+void mousePressed();
+void mouseReleased();
+void mouseClicked();
+void mouseMoved();
+void mouseDragged();
+void mouseWheel(int delta);
+void windowMoved();
+void windowResized();
 #endif
 
 // =============================================================================
