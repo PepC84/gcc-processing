@@ -1226,6 +1226,25 @@ void setup() {
     populateTree();
     outLines.push_back("gcc-processing IDE ready.");
     outLines.push_back("Ctrl+B build | Ctrl+R run | Ctrl+. stop | Ctrl+Shift+M serial | Ctrl+Shift+L libs");
+
+#ifdef _WIN32
+    // Wire all event callbacks on Windows.
+    // Done here (not at static init) to guarantee _wireCallbacksFn is
+    // already constructed before we assign to it.
+    _wireCallbacksFn = [] {
+        _onKeyPressed    = keyPressed;
+        _onKeyReleased   = keyReleased;
+        _onKeyTyped      = keyTyped;
+        _onMousePressed  = mousePressed;
+        _onMouseReleased = mouseReleased;
+        _onMouseClicked  = mouseClicked;
+        _onMouseMoved    = mouseMoved;
+        _onMouseDragged  = mouseDragged;
+        _onMouseWheel    = mouseWheel;
+        _onWindowMoved   = windowMoved;
+        _onWindowResized = windowResized;
+    };
+#endif
 }
 
 void draw() {
@@ -1394,21 +1413,25 @@ void mousePressed(){
         // Copy all
         float cbx=(float)(consoleX()+consoleW()-84),cby2=(float)(cy+7),cbw2=76,cbh=16;
         if (mouseX>=cbx && mouseX<=cbx+cbw2 && mouseY>=cby2 && mouseY<=cby2+cbh) {
-            // Copy ALL lines from ALL terminal tabs to clipboard
+            // Copy every line from every terminal tab to the clipboard
             std::string all;
             {
                 std::lock_guard<std::mutex> lk(outMutex);
                 for (int t = 0; t < (int)terminals.size(); t++) {
+                    auto& tab = terminals[t];
+                    // Add tab header when there are multiple tabs
                     if (terminals.size() > 1)
-                        all += "=== " + terminals[t].name + " ===\n";
-                    for (auto& l : terminals[t].lines)
-                        all += l + "\n";
+                        all += "--- " + tab.name + " ---\n";
+                    for (auto& line : tab.lines)
+                        all += line + "\n";
+                    // Blank line between tabs
+                    if (t + 1 < (int)terminals.size())
+                        all += "\n";
                 }
             }
-            if (!all.empty()) {
-                auto* win = glfwGetCurrentContext();
-                if (win) glfwSetClipboardString(win, all.c_str());
-            }
+            auto* win = glfwGetCurrentContext();
+            if (win && !all.empty())
+                glfwSetClipboardString(win, all.c_str());
             return;
         }
         // Line click
@@ -1749,29 +1772,6 @@ void windowResized() {
     if (ftEntries.empty()) populateTree();
 }
 
-// On Windows: set _wireCallbacksFn so Processing::run() can wire events.
-// This struct's constructor runs at static init time, after all functions
-// in this file are defined, so the lambdas can safely capture them.
-// No exported symbol needed -- zero linker dependency.
-#ifdef _WIN32
-struct _WireSetup {
-    _WireSetup() {
-        _wireCallbacksFn = [] {
-            _onKeyPressed    = keyPressed;
-            _onKeyReleased   = keyReleased;
-            _onKeyTyped      = keyTyped;
-            _onMousePressed  = mousePressed;
-            _onMouseReleased = mouseReleased;
-            _onMouseClicked  = mouseClicked;
-            _onMouseMoved    = mouseMoved;
-            _onMouseDragged  = mouseDragged;
-            _onMouseWheel    = mouseWheel;
-            _onWindowMoved   = windowMoved;
-            _onWindowResized = windowResized;
-        };
-    }
-};
-static _WireSetup _wireSetup;
-#endif
+// (Windows wiring is done inside setup() -- see below)
 
 } // namespace Processing

@@ -5,7 +5,7 @@ void setup() {
   size(640, 360);
 }
 
-// -- loops forever -----------------------------------
+// -- looasdps forever -----------------------------------
 void draw() {
   background(102);
   fill(255);
