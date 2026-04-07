@@ -279,9 +279,10 @@ static void sketchReaderThread(int /*unused*/) {
 using Snapshot = std::pair<std::vector<std::string>, std::pair<int,int>>;
 static std::vector<Snapshot> undoStack, redoStack;
 static void pushUndo() {
-    undoStack.push_back({code,{curLine,curCol}});
-    if (undoStack.size()>200) undoStack.erase(undoStack.begin());
-    redoStack.clear(); modified=true;
+    undoStack.push_back({ code, { curLine, curCol } });
+    if (undoStack.size() > 200) undoStack.erase(undoStack.begin());
+    redoStack.clear();
+    modified = true;
 }
 
 // ===========================================================================
@@ -436,10 +437,17 @@ static void checkInstalled() {
 // CURSOR / SELECTION
 // ===========================================================================
 
-static void clamp() { curLine=std::max(0,std::min(curLine,(int)code.size()-1)); curCol=std::max(0,std::min(curCol,(int)code[curLine].size())); }
-static void ensureVis() { if(curLine<scrollTop)scrollTop=curLine; if(curLine>=scrollTop+visLines())scrollTop=curLine-visLines()+1; scrollTop=std::max(0,scrollTop); }
+static void clamp() {
+    curLine = std::max(0, std::min(curLine, (int)code.size()-1));
+    curCol  = std::max(0, std::min(curCol,  (int)code[curLine].size()));
+}
+static void ensureVis() {
+    if (curLine < scrollTop) scrollTop = curLine;
+    if (curLine >= scrollTop + visLines()) scrollTop = curLine - visLines() + 1;
+    scrollTop = std::max(0, scrollTop);
+}
 static bool hasSel()   { return selLine>=0; }
-static void clearSel() { selLine=-1; selCol=-1; }
+static void clearSel() { selLine = -1; selCol = -1; }
 static void selRange(int& l0,int& c0,int& l1,int& c1) {
     if (selLine<curLine||(selLine==curLine&&selCol<=curCol)) {l0=selLine;c0=selCol;l1=curLine;c1=curCol;}
     else {l0=curLine;c0=curCol;l1=selLine;c1=selCol;}
@@ -1072,26 +1080,26 @@ static void drawFilePicker(){
 // SETUP / DRAW
 // ===========================================================================
 
-void setup(){
-    size(1080,740);
+void setup() {
+    size(1080, 740);
     windowResizable(true);
     frameRate(60);
     checkInstalled();
+    populateTree();
     outLines.push_back("gcc-processing IDE ready.");
-    outLines.push_back("Ctrl+B build  |  Ctrl+R run  |  Ctrl+. stop  |  Ctrl+Shift+M serial  |  Ctrl+Shift+L libs");
+    outLines.push_back("Ctrl+B build | Ctrl+R run | Ctrl+. stop | Ctrl+Shift+M serial | Ctrl+Shift+L libs");
 }
 
-void draw(){
-    background(30,30,30);
-    if (sketchRunning){std::lock_guard<std::mutex> lk(outMutex);}  // ensure memory visibility
+void draw() {
+    background(30, 30, 30);
     drawSidebar();
-    if (!fpShow){drawEditor();drawStatus();}
+    if (!fpShow) { drawEditor(); drawStatus(); }
     drawConsole();
-    if (fpShow) drawFilePicker();
-    drawToolbar();
-    drawMenuBar();
+    if (fpShow)     drawFilePicker();
     if (showSerial) drawSerialMonitor();
     if (showLibMgr) drawLibMgr();
+    drawToolbar();   // chrome always on top
+    drawMenuBar();
 }
 
 // ===========================================================================
@@ -1102,12 +1110,19 @@ static bool dragging=false;
 static int  clickCount   = 0;
 static double lastClickTime = 0.0;
 
-static void mouseToLC(int& li,int& col){
-    float lh=lineH();
-    li=scrollTop+(int)((mouseY-editorY())/lh);
-    li=std::max(0,std::min(li,(int)code.size()-1));
-    textSize(FS); float tx=sbW()+GUTTER_W+4; col=0;
-    for (int c=0;c<(int)code[li].size();c++){float cw=textWidth(std::string(1,code[li][c]));if(tx+cw*0.5f>mouseX)break;tx+=cw;col=c+1;}
+static void mouseToLC(int& li, int& col) {
+    float lh = lineH();
+    li  = scrollTop + (int)((mouseY - editorY()) / lh);
+    li  = std::max(0, std::min(li, (int)code.size()-1));
+    textSize(FS);
+    float tx = (float)(sbW() + GUTTER_W + 4);
+    col = 0;
+    for (int c = 0; c < (int)code[li].size(); c++) {
+        float cw = textWidth(std::string(1, code[li][c]));
+        if (tx + cw * 0.5f > mouseX) break;
+        tx += cw;
+        col = c + 1;
+    }
 }
 
 void mousePressed(){
@@ -1240,9 +1255,37 @@ void mousePressed(){
         }
         // Copy all
         float cbx=(float)(consoleX()+consoleW()-84),cby2=(float)(cy+7),cbw2=76,cbh=16;
-        if (mouseX>=cbx&&mouseX<=cbx+cbw2&&mouseY>=cby2&&mouseY<=cby2+cbh){std::string all;{std::lock_guard<std::mutex> lk(outMutex);for(auto& l:terminals[activeTab].lines)all+=l+"\n";}if(!all.empty())glfwSetClipboardString(glfwGetCurrentContext(),all.c_str());return;}
+        if (mouseX>=cbx && mouseX<=cbx+cbw2 && mouseY>=cby2 && mouseY<=cby2+cbh) {
+            // Copy all output lines to clipboard
+            std::string all;
+            {
+                std::lock_guard<std::mutex> lk(outMutex);
+                for (auto& l : terminals[activeTab].lines)
+                    all += l + "\n";
+            }
+            if (!all.empty()) {
+                auto* win = glfwGetCurrentContext();
+                if (win) glfwSetClipboardString(win, all.c_str());
+            }
+            return;
+        }
         // Line click
-        if (mouseY>=cy+4+TAB_H&&mouseY<height){float lh2=FSS*1.5f;int vi=(int)((mouseY-(cy+4+TAB_H))/lh2);auto& tlines=terminals[activeTab].lines;auto& tscroll=terminals[activeTab].scroll;int li=tscroll+vi;if(li>=0&&li<(int)tlines.size()){consoleSelLine=li;std::lock_guard<std::mutex> lk(outMutex);glfwSetClipboardString(glfwGetCurrentContext(),tlines[li].c_str());}return;}
+        if (mouseY >= cy+4+TAB_H && mouseY < height) {
+            float lh2 = FSS * 1.5f;
+            int vi = (int)((mouseY - (cy+4+TAB_H)) / lh2);
+            auto& tlines  = terminals[activeTab].lines;
+            auto& tscroll = terminals[activeTab].scroll;
+            int li = tscroll + vi;
+            if (li >= 0 && li < (int)tlines.size()) {
+                consoleSelLine = li;
+                auto* win = glfwGetCurrentContext();
+                if (win) {
+                    std::lock_guard<std::mutex> lk(outMutex);
+                    glfwSetClipboardString(win, tlines[li].c_str());
+                }
+            }
+            return;
+        }
     }
 
     // -- Editor ---------------------------------------------------------
@@ -1280,14 +1323,37 @@ void mousePressed(){
     }
 }
 
-void mouseDragged(){
-    if (consoleResizing){int delta=consoleResizeAnchorY-mouseY;CONSOLE_H=std::max(CONSOLE_H_MIN,std::min(CONSOLE_H_MAX,consoleResizeAnchorH+delta));return;}
-    if (termSideResizing){int delta=termSideAnchorX-mouseX;TERM_SIDE_W=std::max(TERM_SIDE_W_MIN,std::min(TERM_SIDE_W_MAX,termSideAnchorW+delta));return;}
-    if (sidebarResizing){int delta=mouseX-sidebarResizeAnchorX;SIDEBAR_W=std::max(SIDEBAR_W_MIN,std::min(SIDEBAR_W_MAX,sidebarResizeAnchorW+delta));return;}
+void mouseDragged() {
+    if (consoleResizing) {
+        int delta = consoleResizeAnchorY - mouseY;
+        CONSOLE_H = std::max(CONSOLE_H_MIN, std::min(CONSOLE_H_MAX, consoleResizeAnchorH + delta));
+        return;
+    }
+    if (termSideResizing) {
+        int delta = termSideAnchorX - mouseX;
+        TERM_SIDE_W = std::max(TERM_SIDE_W_MIN, std::min(TERM_SIDE_W_MAX, termSideAnchorW + delta));
+        return;
+    }
+    if (sidebarResizing) {
+        int delta = mouseX - sidebarResizeAnchorX;
+        SIDEBAR_W = std::max(SIDEBAR_W_MIN, std::min(SIDEBAR_W_MAX, sidebarResizeAnchorW + delta));
+        return;
+    }
     if (!dragging) return;
-    if (mouseY>=editorY()&&mouseY<editorY()+editorH()){int li,col;mouseToLC(li,col);curLine=li;curCol=col;clamp();ensureVis();}
+    if (mouseY >= editorY() && mouseY < editorY() + editorH()) {
+        int li, col;
+        mouseToLC(li, col);
+        curLine = li; curCol = col;
+        clamp(); ensureVis();
+    }
 }
-void mouseReleased(){consoleResizing=false;termSideResizing=false;sidebarResizing=false;dragging=false;if(hasSel()&&selLine==curLine&&selCol==curCol)clearSel();}
+void mouseReleased() {
+    consoleResizing  = false;
+    termSideResizing = false;
+    sidebarResizing  = false;
+    dragging         = false;
+    if (hasSel() && selLine == curLine && selCol == curCol) clearSel();
+}
 void mouseWheel(int delta){
     bool ctrl=glfwGetKey(glfwGetCurrentContext(),GLFW_KEY_LEFT_CONTROL)==GLFW_PRESS||glfwGetKey(glfwGetCurrentContext(),GLFW_KEY_RIGHT_CONTROL)==GLFW_PRESS;
     if (showLibMgr){libScroll+=delta;return;}
@@ -1307,9 +1373,21 @@ void mouseWheel(int delta){
 // KEYBOARD
 // ===========================================================================
 
-static void autoFormat(){
-    pushUndo();int depth=0;
-    for (auto& ln:code){std::string t=ln;size_t sp=t.find_first_not_of(" \t");if(sp!=std::string::npos)t=t.substr(sp);if(!t.empty()&&t[0]=='}')depth=std::max(0,depth-1);ln=std::string(depth*2,' ')+t;for(char c:t){if(c=='{')depth++;else if(c=='}')depth--;}depth=std::max(0,depth);}
+static void autoFormat() {
+    pushUndo();
+    int depth = 0;
+    for (auto& ln : code) {
+        std::string t = ln;
+        size_t sp = t.find_first_not_of(" \t");
+        if (sp != std::string::npos) t = t.substr(sp);
+        if (!t.empty() && t[0] == '}') depth = std::max(0, depth - 1);
+        ln = std::string(depth * 2, ' ') + t;
+        for (char c : t) {
+            if      (c == '{') depth++;
+            else if (c == '}') depth--;
+        }
+        depth = std::max(0, depth);
+    }
 }
 
 void keyPressed(){
@@ -1478,8 +1556,10 @@ void windowMoved(){}
 void mouseClicked(){}
 void windowResized(){ if (ftEntries.empty()) populateTree(); }
 
-// wireCallbacks() -- called by Processing::run() on Windows after setup().
-// All event functions are defined above so the compiler can resolve them.
+// wireCallbacks() -- called by Processing::run() on Windows.
+// Defined here so all event functions are already in scope.
+// Processing_defaults.cpp provides a no-op stub for user sketches that
+// don't define their own callbacks.
 #ifdef _WIN32
 void wireCallbacks() {
     _onKeyPressed    = keyPressed;
