@@ -223,7 +223,7 @@ static std::string getDefaultBuildFlags() {
     flags += "-lglfw -lGLEW -framework OpenGL";
     return flags;
 #elif defined(_WIN32)
-    return "-lglfw3 -lglew32 -lopengl32 -lglu32 -lcomdlg32 -lshell32 -lole32 -luuid -mwindows -pthread";
+    return "-lglfw3 -lglew32 -lopengl32 -lglu32 -lcomdlg32 -lshell32 -lole32 -luuid -mwindows -pthread -D_USE_MATH_DEFINES";
 #else
     return "-lglfw -lGLEW -lGL -lGLU -lm -pthread";
 #endif
@@ -590,70 +590,144 @@ static bool writeSketch() {
 }
 
 static void doCompile() {
-    outLines.clear(); hasError=false; outScroll=0;
+    outLines.clear();
+    hasError  = false;
+    outScroll = 0;
+
     if (!writeSketch()) return;
-    // Derive binary name from current file (e.g. "MySketch.cpp" -> "MySketch")
+
+    // Derive output binary name from current filename
     sketchBin = "SketchApp";
     if (!currentFile.empty()) {
         std::string base = currentFile;
+        // Strip directory
         size_t sl = base.rfind('/');
+        if (sl == std::string::npos) sl = base.rfind('\\');
         if (sl != std::string::npos) base = base.substr(sl + 1);
+        // Strip .cpp extension
         if (base.size() > 4 && base.substr(base.size()-4) == ".cpp")
             base = base.substr(0, base.size()-4);
         sketchBin = base;
     }
+
 #ifdef _WIN32
-    std::string ext=".exe";
+    std::string ext      = ".exe";
+    std::string defaults = " src/Processing_defaults.cpp";
 #else
-    std::string ext="";
+    std::string ext      = "";
+    std::string defaults = "";
 #endif
-    std::string cmd="g++ -std=c++17 src/Processing.cpp src/Sketch_run.cpp src/main.cpp -o "+sketchBin+ext+" "+buildFlags+" 2>&1";
-    outLines.push_back("Building: "+sketchBin); outLines.push_back("$ "+cmd);
-    FILE* p=popen(cmd.c_str(),"r"); if (!p){outLines.push_back("ERROR: popen failed");hasError=true;return;}
+
+    std::string outBin = sketchBin + ext;
+
+    // Build the full compile command
+    std::string cmd = "g++ -std=c++17"
+                      " src/Processing.cpp"
+                      " src/Sketch_run.cpp" +
+                      defaults +
+                      " src/main.cpp"
+                      " -o " + outBin +
+                      " " + buildFlags +
+                      " 2>&1";
+
+    outLines.push_back("Building: " + sketchBin);
+    outLines.push_back("$ " + cmd);
+
+#ifdef _WIN32
+    FILE* pipe = _popen(cmd.c_str(), "r");
+#else
+    FILE* pipe = popen(cmd.c_str(), "r");
+#endif
+    if (!pipe) {
+        outLines.push_back("ERROR: could not launch compiler");
+        outLines.push_back("  Make sure g++ is in your PATH");
+        hasError = true;
+        return;
+    }
+
     char buf[512];
-    while (fgets(buf,sizeof(buf),p)) {
+    while (fgets(buf, sizeof(buf), pipe)) {
         std::string s(buf);
-        while (!s.empty()&&(s.back()=='\n'||s.back()=='\r')) s.pop_back();
-        if (s.find("error:")!=std::string::npos) hasError=true;
+        while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+        if (s.find("error:") != std::string::npos) hasError = true;
         if (!s.empty()) outLines.push_back(s);
     }
-    pclose(p);
+#ifdef _WIN32
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+
     if (!hasError) {
-        outLines.push_back("OK Built: ./"+sketchBin+ext+"  (Ctrl+R to run)");
-        int errC=0,warnC=0;
-        for (auto& ol:outLines){if(ol.find("error:")!=std::string::npos)errC++;if(ol.find("warning:")!=std::string::npos)warnC++;}
-        (void)errC;(void)warnC;
+        outLines.push_back("Built: " + outBin + "   (Ctrl+R to run)");
     } else {
-        int errC=0,warnC=0;
-        for (auto& ol:outLines){if(ol.find("error:")!=std::string::npos)errC++;if(ol.find("warning:")!=std::string::npos)warnC++;}
-        outLines.push_back("X Build failed: "+std::to_string(errC)+" error(s)"+(warnC>0?", "+std::to_string(warnC)+" warning(s)":""));
-        for (auto& ol:outLines){size_t pp=ol.find("Sketch_run.cpp:");if(pp!=std::string::npos){size_t p2=pp+15;int ln=0;while(p2<ol.size()&&isdigit((unsigned char)ol[p2]))ln=ln*10+(ol[p2++]-'0');if(ln>0&&ln<=(int)code.size()){curLine=ln-1;curCol=0;clamp();ensureVis();}break;}}
+        // Count errors/warnings for summary
+        int errCount = 0, warnCount = 0;
+        for (auto& ol : outLines) {
+            if (ol.find("error:")   != std::string::npos) errCount++;
+            if (ol.find("warning:") != std::string::npos) warnCount++;
+        }
+        std::string summary = "Build failed: " + std::to_string(errCount) + " error(s)";
+        if (warnCount > 0) summary += ", " + std::to_string(warnCount) + " warning(s)";
+        outLines.push_back(summary);
+
+        // Jump editor cursor to first error line in the sketch
+        for (auto& ol : outLines) {
+            size_t pos = ol.find("Sketch_run.cpp:");
+            if (pos != std::string::npos) {
+                size_t p2 = pos + 15;
+                int ln = 0;
+                while (p2 < ol.size() && isdigit((unsigned char)ol[p2]))
+                    ln = ln * 10 + (ol[p2++] - '0');
+                if (ln > 0 && ln <= (int)code.size()) {
+                    curLine = ln - 1;
+                    curCol  = 0;
+                    clamp();
+                    ensureVis();
+                }
+                break;
+            }
+        }
     }
-    outScroll=std::max(0,(int)outLines.size()-10);
+
+    outScroll = std::max(0, (int)outLines.size() - 10);
 }
 
 static void doRun() {
+    // Always rebuild before running so we run the latest code
     doCompile();
+
     if (hasError) {
         outLines.push_back("Not running -- fix errors first.");
         outScroll = std::max(0, (int)outLines.size() - 10);
         return;
     }
+
     stopSketch();
 
 #ifdef _WIN32
-    std::string bin = "./" + sketchBin + ".exe";
+    std::string bin = sketchBin + ".exe";
 #else
     std::string bin = "./" + sketchBin;
 #endif
 
-    sketchProc = plat_proc_start(bin);
-    if (!plat_proc_ok(sketchProc)) {
-        outLines.push_back("ERROR: failed to start " + bin);
+    // Check binary actually exists before trying to launch
+    if (!plat_file_exists(bin)) {
+        outLines.push_back("ERROR: binary not found: " + bin);
+        outLines.push_back("  Try Ctrl+B to build first.");
+        outScroll = std::max(0, (int)outLines.size() - 10);
         return;
     }
-    sketchRunning = true;
 
+    sketchProc = plat_proc_start(bin);
+    if (!plat_proc_ok(sketchProc)) {
+        outLines.push_back("ERROR: failed to launch " + bin);
+        outLines.push_back("  Check that all required DLLs are present.");
+        outScroll = std::max(0, (int)outLines.size() - 10);
+        return;
+    }
+
+    sketchRunning = true;
     {
         std::lock_guard<std::mutex> lk(outMutex);
         outLines.push_back("Running: " + bin);
