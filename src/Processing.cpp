@@ -1336,23 +1336,33 @@ static void fbsize_cb(GLFWwindow*,int fw,int fh){
 
 static bool tryLoadTTF(const std::string& path, float size); // forward decl
 
+// Called from main() before run() if --debug flag is present
+void enableDebugConsole() {
+#ifdef _WIN32
+    // Allocate a Windows console for debug output without needing -mconsole
+    if (AllocConsole()) {
+        FILE* f;
+        freopen_s(&f, "CONOUT$", "w", stdout);
+        freopen_s(&f, "CONOUT$", "w", stderr);
+        freopen_s(&f, "CONIN$",  "r", stdin);
+        fprintf(stderr, "[debug] gcc-processing debug console enabled\n");
+        fflush(stderr);
+    }
+#endif
+}
+
 void run(){
-    // Make stdout fully unbuffered so print()/println() appear immediately
-    // in the IDE console when running via pipe capture
     setvbuf(stdout, nullptr, _IONBF, 0);
     std::srand((unsigned)std::time(nullptr));
     buildNoisePerm(0);
 
-    fprintf(stderr, "[init] gcc-processing starting...\n"); fflush(stderr);
     if(!glfwInit()){
-        fprintf(stderr, "[ERR] glfwInit() failed.\n");
-        fprintf(stderr, "      Make sure libglfw3.dll and glew32.dll are next to ide.exe\n");
+        fprintf(stderr, "[ERR] glfwInit() failed. Make sure libglfw3.dll is next to ide.exe\n");
 #ifdef _WIN32
-        fprintf(stderr, "Press Enter to close...\n"); getchar();
+        MessageBoxA(NULL, "glfwInit() failed.\nMake sure libglfw3.dll and glew32.dll are next to ide.exe", "gcc-processing Error", MB_OK|MB_ICONERROR);
 #endif
         return;
     }
-    fprintf(stderr, "[init] GLFW OK\n"); fflush(stderr);
     GLFWmonitor* mon=glfwGetPrimaryMonitor();
     if(mon){const GLFWvidmode* vm=glfwGetVideoMode(mon);displayWidth=vm->width;displayHeight=vm->height;}
 
@@ -1372,27 +1382,26 @@ void run(){
     glfwWindowHint(GLFW_RESIZABLE,isResizable?GLFW_TRUE:GLFW_FALSE);
     glfwWindowHint(GLFW_SAMPLES,4);
     glfwWindowHint(GLFW_STENCIL_BITS,8);  // needed for concave shape fill
-    fprintf(stderr, "[init] Creating window %dx%d...\n", winWidth, winHeight); fflush(stderr);
     gWindow=glfwCreateWindow(winWidth,winHeight,"gcc-processing",nullptr,nullptr);
     if(!gWindow){
-        fprintf(stderr, "[ERR] Window creation failed.\n");
-        fprintf(stderr, "      Check that your GPU supports OpenGL 2.0+\n");
 #ifdef _WIN32
-        fprintf(stderr, "Press Enter to close...\n"); getchar();
+        MessageBoxA(NULL, "Window creation failed.\nCheck that your GPU supports OpenGL 2.0+", "gcc-processing Error", MB_OK|MB_ICONERROR);
+#else
+        fprintf(stderr, "[ERR] Window creation failed. Check OpenGL 2.0+ support.\n");
 #endif
         glfwTerminate(); return;
     }
     glfwMakeContextCurrent(gWindow);
-    fprintf(stderr, "[init] GLEW init...\n"); fflush(stderr);
     GLenum glewErr = glewInit();
     if(glewErr != GLEW_OK){
-        fprintf(stderr, "[ERR] glewInit() failed: %s\n", glewGetErrorString(glewErr));
 #ifdef _WIN32
-        fprintf(stderr, "Press Enter to close...\n"); getchar();
+        char msg[256]; snprintf(msg,sizeof(msg),"glewInit() failed: %s", glewGetErrorString(glewErr));
+        MessageBoxA(NULL, msg, "gcc-processing Error", MB_OK|MB_ICONERROR);
+#else
+        fprintf(stderr, "[ERR] glewInit() failed: %s\n", glewGetErrorString(glewErr));
 #endif
         glfwDestroyWindow(gWindow); glfwTerminate(); return;
     }
-    fprintf(stderr, "[init] OpenGL %s\n", glGetString(GL_VERSION)); fflush(stderr);
 
     glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_DEPTH_TEST);

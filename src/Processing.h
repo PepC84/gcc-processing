@@ -885,6 +885,7 @@ inline void delay(int ms){std::this_thread::sleep_for(std::chrono::milliseconds(
 // =============================================================================
 
 void run();
+void enableDebugConsole();  // call before run() to open a debug console (Windows only)
 
 // =============================================================================
 // JSON

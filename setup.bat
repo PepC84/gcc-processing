@@ -116,7 +116,14 @@ if not exist "default.ttf" (
 if not exist "src\main.cpp" (
     (
         echo #include "Processing.h"
-        echo int main^(^) ^{ Processing::run^(^)^; return 0^; ^}
+        echo #include ^<string^>
+        echo int main^(int argc, char** argv^) {
+        echo     for ^(int i = 1; i ^< argc; i++^)
+        echo         if ^(std::string^(argv[i]^) == "--debug"^)
+        echo             Processing::enableDebugConsole^(^);
+        echo     Processing::run^(^);
+        echo     return 0;
+        echo }
     ) > src\main.cpp
     echo [OK]  src\main.cpp written
 ) else ( echo [OK]  src\main.cpp already present )
@@ -158,7 +165,7 @@ echo [INFO] Writing build scripts...
         -lcomdlg32 -lshell32 -lole32 -luuid ^
         -pthread -O2 ^
         -D_USE_MATH_DEFINES ^
-        -mconsole
+        -mwindows
     echo if %%ERRORLEVEL%% neq 0 ^( echo [ERR] Build failed. ^& pause ^& exit /b 1 ^)
     echo echo [build] Done: ide.exe
 ) > buildIDE.bat
@@ -200,9 +207,8 @@ echo [INFO] Building IDE...
     -o ide.exe ^
     -lglfw3 -lglew32 -lopengl32 -lglu32 ^
     -lcomdlg32 -lshell32 -lole32 -luuid ^
-    -pthread -O2 ^
-    -D_USE_MATH_DEFINES ^
-    -mconsole
+    -mwindows -pthread -O2 ^
+    -D_USE_MATH_DEFINES
 
 if %ERRORLEVEL% neq 0 (
     echo.
@@ -247,5 +253,6 @@ echo   Build sketch:  build.bat MySketch.cpp
 echo   Rebuild IDE:   buildIDE.bat
 echo.
 pause
-:: Launch IDE in its own window (console visible for error messages)
+:: Launch IDE
+:: Run "ide.exe --debug" from a terminal to see error output
 start "gcc-processing IDE" ide.exe
