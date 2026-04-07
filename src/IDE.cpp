@@ -321,27 +321,39 @@ static const std::vector<int> BAUD_RATES = {
 static int baudIndex = 5;
 
 static void openSerial(const std::string& port, int baud) {
-    if (plat_serial_ok(serialFd)) { plat_serial_close(serialFd); serialFd=plat_serial_invalid(); }
+    if (plat_serial_ok(serialFd)) {
+        plat_serial_close(serialFd);
+        serialFd = plat_serial_invalid();
+    }
     serialFd = plat_serial_open(port, baud);
-    if (!plat_serial_ok(serialFd)) { serialLog.push_back("ERROR: cannot open "+port); return; }
-    serialPort=port;
-    serialLog.push_back("Connected: "+port+" @ "+std::to_string(baud)+" baud");
+    if (!plat_serial_ok(serialFd)) {
+        serialLog.push_back("ERROR: cannot open " + port);
+        return;
+    }
+    serialPort = port;
+    serialLog.push_back("Connected: " + port + " @ " + std::to_string(baud) + " baud");
 }
 static void closeSerial() {
-    if (plat_serial_ok(serialFd)) { plat_serial_close(serialFd); serialFd=plat_serial_invalid(); }
-    serialLog.push_back("Disconnected."); serialPort="";
+    if (plat_serial_ok(serialFd)) {
+        plat_serial_close(serialFd);
+        serialFd = plat_serial_invalid();
+    }
+    serialLog.push_back("Disconnected.");
+    serialPort = "";
 }
 static void pollSerial() {
     if (!plat_serial_ok(serialFd)) return;
-    char buf[256]; int n;
+    char buf[256];
+    int n;
     static std::string partial;
-    while ((n=plat_serial_read(serialFd,buf,sizeof(buf)-1))>0) {
-        buf[n]=0; partial+=buf;
+    while ((n = plat_serial_read(serialFd, buf, sizeof(buf)-1)) > 0) {
+        buf[n] = 0;
+        partial += buf;
         size_t pos;
-        while ((pos=partial.find('\n'))!=std::string::npos) {
-            serialLog.push_back(partial.substr(0,pos));
-            partial=partial.substr(pos+1);
-            serialScroll=std::max(0,(int)serialLog.size()-16);
+        while ((pos = partial.find('\n')) != std::string::npos) {
+            serialLog.push_back(partial.substr(0, pos));
+            partial = partial.substr(pos+1);
+            serialScroll = std::max(0, (int)serialLog.size() - 16);
         }
     }
 }
@@ -426,10 +438,16 @@ static bool isPkgInstalled(const std::string&) { return false; }
 static void checkInstalled() {
     for (auto& lib : libraries) {
         if (lib.pkg.empty()) {
-            std::string h=lib.header; size_t a=h.find('"'),b=h.rfind('"');
-            if (a!=std::string::npos&&b!=a) lib.installed=plat_file_exists("src/"+h.substr(a+1,b-a-1));
-            else lib.installed=(lib.name=="Vim keybindings")?vimMode:false;
-        } else { lib.installed=isPkgInstalled(lib.pkg); }
+            // Header-only library -- check if the header exists in src/
+            std::string h = lib.header;
+            size_t a = h.find('"'), b = h.rfind('"');
+            if (a != std::string::npos && b != a)
+                lib.installed = plat_file_exists("src/" + h.substr(a+1, b-a-1));
+            else
+                lib.installed = (lib.name == "Vim keybindings") ? vimMode : false;
+        } else {
+            lib.installed = isPkgInstalled(lib.pkg);
+        }
     }
 }
 
@@ -473,25 +491,51 @@ static void deleteSel() {
 // ===========================================================================
 
 static void newFile() {
-    code={"// -- run once ----------------------------------------","void setup() {","  size(640, 360);","}","","// -- loops forever -----------------------------------","void draw() {","  background(102);"," }"};
-    curLine=curCol=scrollTop=0; clearSel(); undoStack.clear(); redoStack.clear();
-    currentFile=""; sketchBin="SketchApp"; modified=false;
+    code = {
+        "// run once",
+        "void setup() {",
+        "  size(640, 360);",
+        "}",
+        "",
+        "// loops forever",
+        "void draw() {",
+        "  background(102);",
+        "  fill(255);",
+        "  ellipse(mouseX, mouseY, 40, 40);",
+        "}"
+    };
+    curLine = curCol = scrollTop = 0;
+    clearSel();
+    undoStack.clear();
+    redoStack.clear();
+    currentFile = ""; sketchBin = "SketchApp"; modified = false;
     outLines.push_back("New sketch.");
 }
 static void saveFile(const std::string& path) {
-    std::string p=path; if (p.size()<4||p.substr(p.size()-4)!=".cpp") p+=".cpp";
-    std::ofstream f(p); if (!f){outLines.push_back("ERROR: cannot save "+p);return;}
-    for (auto& l:code) f<<l<<"\n";
-    currentFile=p; modified=false; outLines.push_back("Saved: "+p);
-    outScroll=std::max(0,(int)outLines.size()-8);
+    std::string p = path;
+    if (p.size() < 4 || p.substr(p.size()-4) != ".cpp") p += ".cpp";
+    std::ofstream f(p);
+    if (!f) { outLines.push_back("ERROR: cannot save " + p); return; }
+    for (auto& l : code) f << l << "\n";
+    currentFile = p;
+    modified    = false;
+    outLines.push_back("Saved: " + p);
+    outScroll = std::max(0, (int)outLines.size() - 8);
 }
 static void openFile(const std::string& path) {
-    std::ifstream f(path); if (!f){outLines.push_back("ERROR: cannot open "+path);return;}
-    code.clear(); std::string l;
-    while (std::getline(f,l)) code.push_back(l);
+    std::ifstream f(path);
+    if (!f) { outLines.push_back("ERROR: cannot open " + path); return; }
+    code.clear();
+    std::string l;
+    while (std::getline(f, l)) code.push_back(l);
     if (code.empty()) code.push_back("");
-    curLine=curCol=scrollTop=0; clearSel(); undoStack.clear(); redoStack.clear();
-    currentFile=path; modified=false; outLines.push_back("Opened: "+path);
+    curLine = curCol = scrollTop = 0;
+    clearSel();
+    undoStack.clear();
+    redoStack.clear();
+    currentFile = path;
+    modified    = false;
+    outLines.push_back("Opened: " + path);
 }
 static std::string sysFileDialog(bool save,const std::string& def="") { return plat_file_dialog(save,def); }
 static std::vector<std::string> listSketches() { return plat_list_sketches(); }
@@ -548,12 +592,15 @@ static bool writeSketch() {
 static void doCompile() {
     outLines.clear(); hasError=false; outScroll=0;
     if (!writeSketch()) return;
-    sketchBin="SketchApp";
+    // Derive binary name from current file (e.g. "MySketch.cpp" -> "MySketch")
+    sketchBin = "SketchApp";
     if (!currentFile.empty()) {
-        std::string base=currentFile;
-        size_t sl=base.rfind('/'); if (sl!=std::string::npos) base=base.substr(sl+1);
-        if (base.size()>4&&base.substr(base.size()-4)==".cpp") base=base.substr(0,base.size()-4);
-        sketchBin=base;
+        std::string base = currentFile;
+        size_t sl = base.rfind('/');
+        if (sl != std::string::npos) base = base.substr(sl + 1);
+        if (base.size() > 4 && base.substr(base.size()-4) == ".cpp")
+            base = base.substr(0, base.size()-4);
+        sketchBin = base;
     }
 #ifdef _WIN32
     std::string ext=".exe";
@@ -587,26 +634,43 @@ static void doCompile() {
 
 static void doRun() {
     doCompile();
-    if (hasError){outLines.push_back("X Not running -- fix errors first.");outScroll=std::max(0,(int)outLines.size()-10);return;}
+    if (hasError) {
+        outLines.push_back("Not running -- fix errors first.");
+        outScroll = std::max(0, (int)outLines.size() - 10);
+        return;
+    }
     stopSketch();
+
 #ifdef _WIN32
-    std::string bin="./"+sketchBin+".exe";
+    std::string bin = "./" + sketchBin + ".exe";
 #else
-    std::string bin="./"+sketchBin;
+    std::string bin = "./" + sketchBin;
 #endif
-    sketchProc=plat_proc_start(bin);
-    if (!plat_proc_ok(sketchProc)){outLines.push_back("ERROR: failed to start "+bin);return;}
-    sketchRunning=true;
-    { std::lock_guard<std::mutex> lk(outMutex);
-      outLines.push_back("> Running: "+bin);
-      outLines.push_back("------------------------------------------------------"); }
-    sketchThread=std::thread(sketchReaderThread,0);
+
+    sketchProc = plat_proc_start(bin);
+    if (!plat_proc_ok(sketchProc)) {
+        outLines.push_back("ERROR: failed to start " + bin);
+        return;
+    }
+    sketchRunning = true;
+
+    {
+        std::lock_guard<std::mutex> lk(outMutex);
+        outLines.push_back("Running: " + bin);
+        outLines.push_back("------------------------------------------------------");
+    }
+
+    sketchThread = std::thread(sketchReaderThread, 0);
     sketchThread.detach();
-    outScroll=std::max(0,(int)outLines.size()-10);
+    outScroll = std::max(0, (int)outLines.size() - 10);
 }
 
 static void doStop() {
-    if (sketchRunning){stopSketch();outLines.push_back("# Sketch stopped.");outScroll=std::max(0,(int)outLines.size()-10);}
+    if (sketchRunning) {
+        stopSketch();
+        outLines.push_back("-- Sketch stopped --");
+        outScroll = std::max(0, (int)outLines.size() - 10);
+    }
 }
 
 // ===========================================================================
@@ -1354,18 +1418,44 @@ void mouseReleased() {
     dragging         = false;
     if (hasSel() && selLine == curLine && selCol == curCol) clearSel();
 }
-void mouseWheel(int delta){
-    bool ctrl=glfwGetKey(glfwGetCurrentContext(),GLFW_KEY_LEFT_CONTROL)==GLFW_PRESS||glfwGetKey(glfwGetCurrentContext(),GLFW_KEY_RIGHT_CONTROL)==GLFW_PRESS;
-    if (showLibMgr){libScroll+=delta;return;}
-    if (showSerial){serialScroll+=delta;return;}
-    if (ctrl){FS=std::max(8.0f,std::min(32.0f,FS-(float)delta));FSS=FS-1;FST=FS-2;return;}
-    if (sidebarVisible&&mouseX<SIDEBAR_W){ftScroll=std::max(0,ftScroll+delta);return;}
-    if (mouseY>=editorY()&&mouseY<editorY()+editorH())
-        scrollTop=std::max(0,std::min(scrollTop+delta*3,std::max(0,(int)code.size()-visLines())));
-    else if (mouseY>=consoleY()){
-        float lh2=FSS*1.5f;int vis=std::max(1,(int)((CONSOLE_H-4-TAB_H)/lh2));
-        auto& tscroll=terminals[activeTab].scroll;auto& tlines=terminals[activeTab].lines;
-        tscroll=std::max(0,std::min(tscroll+delta*2,std::max(0,(int)tlines.size()-vis)));
+void mouseWheel(int delta) {
+    auto* win = glfwGetCurrentContext();
+    bool ctrl = win && (
+        glfwGetKey(win, GLFW_KEY_LEFT_CONTROL)  == GLFW_PRESS ||
+        glfwGetKey(win, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS);
+
+    if (showLibMgr) { libScroll    += delta; return; }
+    if (showSerial) { serialScroll += delta; return; }
+
+    // Ctrl+scroll = zoom font
+    if (ctrl) {
+        FS  = std::max(8.0f, std::min(32.0f, FS - (float)delta));
+        FSS = FS - 1;
+        FST = FS - 2;
+        return;
+    }
+
+    // Sidebar scroll
+    if (sidebarVisible && mouseX < SIDEBAR_W) {
+        ftScroll = std::max(0, ftScroll + delta);
+        return;
+    }
+
+    // Editor scroll
+    if (mouseY >= editorY() && mouseY < editorY() + editorH()) {
+        scrollTop = std::max(0, std::min(scrollTop + delta * 3,
+                   std::max(0, (int)code.size() - visLines())));
+        return;
+    }
+
+    // Console scroll
+    if (mouseY >= consoleY()) {
+        float lh2 = FSS * 1.5f;
+        int vis = std::max(1, (int)((CONSOLE_H - 4 - TAB_H) / lh2));
+        auto& tscroll = terminals[activeTab].scroll;
+        auto& tlines  = terminals[activeTab].lines;
+        tscroll = std::max(0, std::min(tscroll + delta * 2,
+                  std::max(0, (int)tlines.size() - vis)));
     }
 }
 
@@ -1540,21 +1630,46 @@ void keyPressed(){
     clamp();ensureVis();
 }
 
-void keyTyped(){
-    if (showSerial){if(key>=32&&key<127)serialInput+=key;return;}
-    if (fpShow)    {if(key>=32&&key<127)fpInput+=key;return;}
-    if (vimMode&&vimState!=VimState::INSERT){
-        if (vimCmd=="r"&&key>=32&&key<127){pushUndo();if(curCol<(int)code[curLine].size())code[curLine][curCol]=key;vimCmd="";}
+void keyTyped() {
+    // Route typed characters to the active input field
+    if (showSerial) {
+        if (key >= 32 && key < 127) serialInput += key;
         return;
     }
-    if (key>=32&&key<127){pushUndo();if(hasSel())deleteSel();code[curLine].insert(curCol,1,key);curCol++;clamp();ensureVis();}
+    if (fpShow) {
+        if (key >= 32 && key < 127) fpInput += key;
+        return;
+    }
+    // Vim: only handle 'r' replace command in normal mode
+    if (vimMode && vimState != VimState::INSERT) {
+        if (vimCmd == "r" && key >= 32 && key < 127) {
+            pushUndo();
+            if (curCol < (int)code[curLine].size())
+                code[curLine][curCol] = key;
+            vimCmd = "";
+        }
+        return;
+    }
+    // Normal typing into editor
+    if (key >= 32 && key < 127) {
+        pushUndo();
+        if (hasSel()) deleteSel();
+        code[curLine].insert(curCol, 1, key);
+        curCol++;
+        clamp();
+        ensureVis();
+    }
 }
 
-void mouseMoved(){}
-void keyReleased(){}
-void windowMoved(){}
-void mouseClicked(){}
-void windowResized(){ if (ftEntries.empty()) populateTree(); }
+// Unused event stubs (required by Processing.h interface)
+void mouseMoved()   {}
+void keyReleased()  {}
+void windowMoved()  {}
+void mouseClicked() {}
+void windowResized() {
+    // Refresh file tree when window is resized (e.g. after maximize)
+    if (ftEntries.empty()) populateTree();
+}
 
 // wireCallbacks() -- called by Processing::run() on Windows.
 // Defined here so all event functions are already in scope.
