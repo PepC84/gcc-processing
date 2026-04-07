@@ -1343,7 +1343,16 @@ void run(){
     std::srand((unsigned)std::time(nullptr));
     buildNoisePerm(0);
 
-    if(!glfwInit()){std::cerr<<"GLFW init failed\n";return;}
+    fprintf(stderr, "[init] gcc-processing starting...\n"); fflush(stderr);
+    if(!glfwInit()){
+        fprintf(stderr, "[ERR] glfwInit() failed.\n");
+        fprintf(stderr, "      Make sure libglfw3.dll and glew32.dll are next to ide.exe\n");
+#ifdef _WIN32
+        fprintf(stderr, "Press Enter to close...\n"); getchar();
+#endif
+        return;
+    }
+    fprintf(stderr, "[init] GLFW OK\n"); fflush(stderr);
     GLFWmonitor* mon=glfwGetPrimaryMonitor();
     if(mon){const GLFWvidmode* vm=glfwGetVideoMode(mon);displayWidth=vm->width;displayHeight=vm->height;}
 
@@ -1363,10 +1372,27 @@ void run(){
     glfwWindowHint(GLFW_RESIZABLE,isResizable?GLFW_TRUE:GLFW_FALSE);
     glfwWindowHint(GLFW_SAMPLES,4);
     glfwWindowHint(GLFW_STENCIL_BITS,8);  // needed for concave shape fill
-    gWindow=glfwCreateWindow(winWidth,winHeight,"ProcessingCPP",nullptr,nullptr);
-    if(!gWindow){std::cerr<<"Window creation failed\n";glfwTerminate();return;}
+    fprintf(stderr, "[init] Creating window %dx%d...\n", winWidth, winHeight); fflush(stderr);
+    gWindow=glfwCreateWindow(winWidth,winHeight,"gcc-processing",nullptr,nullptr);
+    if(!gWindow){
+        fprintf(stderr, "[ERR] Window creation failed.\n");
+        fprintf(stderr, "      Check that your GPU supports OpenGL 2.0+\n");
+#ifdef _WIN32
+        fprintf(stderr, "Press Enter to close...\n"); getchar();
+#endif
+        glfwTerminate(); return;
+    }
     glfwMakeContextCurrent(gWindow);
-    if(glewInit()!=GLEW_OK){std::cerr<<"GLEW init failed\n";glfwDestroyWindow(gWindow);glfwTerminate();return;}
+    fprintf(stderr, "[init] GLEW init...\n"); fflush(stderr);
+    GLenum glewErr = glewInit();
+    if(glewErr != GLEW_OK){
+        fprintf(stderr, "[ERR] glewInit() failed: %s\n", glewGetErrorString(glewErr));
+#ifdef _WIN32
+        fprintf(stderr, "Press Enter to close...\n"); getchar();
+#endif
+        glfwDestroyWindow(gWindow); glfwTerminate(); return;
+    }
+    fprintf(stderr, "[init] OpenGL %s\n", glGetString(GL_VERSION)); fflush(stderr);
 
     glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_DEPTH_TEST);

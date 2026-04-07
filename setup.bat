@@ -156,8 +156,9 @@ echo [INFO] Writing build scripts...
         -o ide.exe ^
         -lglfw3 -lglew32 -lopengl32 -lglu32 ^
         -lcomdlg32 -lshell32 -lole32 -luuid ^
-        -mwindows -pthread -O2 ^
-        -D_USE_MATH_DEFINES
+        -pthread -O2 ^
+        -D_USE_MATH_DEFINES ^
+        -mconsole
     echo if %%ERRORLEVEL%% neq 0 ^( echo [ERR] Build failed. ^& pause ^& exit /b 1 ^)
     echo echo [build] Done: ide.exe
 ) > buildIDE.bat
@@ -184,19 +185,7 @@ echo [OK]  buildIDE.bat
 ) > build.bat
 echo [OK]  build.bat
 
-:: Also write .sh versions for use inside MSYS2 terminal
-(
-    echo #!/usr/bin/env bash
-    echo set -e
-    echo echo "[build] Compiling IDE..."
-    echo g++ -std=c++17 src/Processing.cpp src/IDE.cpp src/Processing_defaults.cpp src/main.cpp ^
-    echo     -o ide.exe ^
-    echo     -lglfw3 -lglew32 -lopengl32 -lglu32 ^
-    echo     -lcomdlg32 -lshell32 -lole32 -luuid ^
-    echo     -mwindows -pthread -O2 -D_USE_MATH_DEFINES
-    echo echo "[build] Done: ide.exe"
-) > buildIDE.sh
-echo [OK]  buildIDE.sh
+:: Windows: .bat files only (no .sh generated here)
 
 :: ---------------------------------------------------------------------------
 :: 8. Build the IDE
@@ -211,8 +200,9 @@ echo [INFO] Building IDE...
     -o ide.exe ^
     -lglfw3 -lglew32 -lopengl32 -lglu32 ^
     -lcomdlg32 -lshell32 -lole32 -luuid ^
-    -mwindows -pthread -O2 ^
-    -D_USE_MATH_DEFINES
+    -pthread -O2 ^
+    -D_USE_MATH_DEFINES ^
+    -mconsole
 
 if %ERRORLEVEL% neq 0 (
     echo.
@@ -241,15 +231,8 @@ for %%D in (
     )
 )
 
-:: Also auto-collect any DLLs the binary links against
-for /f "tokens=*" %%L in ('objdump -p ide.exe 2^>nul ^| findstr /i "DLL Name"') do (
-    for %%T in (%%L) do (
-        if exist "!MINGW_BIN!\%%T" if not exist "%%T" (
-            copy "!MINGW_BIN!\%%T" . >nul
-            echo [OK]  %%T ^(auto^)
-        )
-    )
-)
+:: Auto-collect any additional DLLs the binary links against (via bash/objdump)
+"!BASH!" -lc "cd '$(cygpath -u "%CD%")' && objdump -p ide.exe 2>/dev/null | grep 'DLL Name' | awk '{print $3}' | while read dll; do [ -f /mingw64/bin/$dll ] && [ ! -f ./$dll ] && cp /mingw64/bin/$dll . && echo "[OK]  $dll (auto)"; done"
 
 :: ---------------------------------------------------------------------------
 :: 10. Done
@@ -264,4 +247,5 @@ echo   Build sketch:  build.bat MySketch.cpp
 echo   Rebuild IDE:   buildIDE.bat
 echo.
 pause
-start "" ide.exe
+:: Launch IDE in its own window (console visible for error messages)
+start "gcc-processing IDE" ide.exe
