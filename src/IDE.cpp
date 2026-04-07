@@ -1079,24 +1079,6 @@ void setup(){
     checkInstalled();
     outLines.push_back("gcc-processing IDE ready.");
     outLines.push_back("Ctrl+B build  |  Ctrl+R run  |  Ctrl+. stop  |  Ctrl+Shift+M serial  |  Ctrl+Shift+L libs");
-
-#ifdef _WIN32
-    // Wire all event callbacks via std::function on Windows
-    // (Linux/macOS uses __attribute__((weak)) and doesn't need this)
-    registerCallbacks(
-        keyPressed,    // kp
-        keyReleased,   // kr
-        keyTyped,      // kt
-        mousePressed,  // mp
-        mouseReleased, // mr
-        mouseClicked,  // mc
-        mouseMoved,    // mm
-        mouseDragged,  // md
-        mouseWheel,    // mw
-        windowMoved,   // wm
-        windowResized  // wr
-    );
-#endif
 }
 
 void draw(){
@@ -1495,5 +1477,28 @@ void keyReleased(){}
 void windowMoved(){}
 void mouseClicked(){}
 void windowResized(){ if (ftEntries.empty()) populateTree(); }
+
+// Wire Windows event callbacks after all functions are defined
+// On Linux/macOS this is handled by __attribute__((weak)) in Processing.h
+#ifdef _WIN32
+struct WinCallbackRegistrar {
+    WinCallbackRegistrar() {
+        registerCallbacks(
+            keyPressed,
+            keyReleased,
+            keyTyped,
+            mousePressed,
+            mouseReleased,
+            mouseClicked,
+            mouseMoved,
+            mouseDragged,
+            mouseWheel,
+            windowMoved,
+            windowResized
+        );
+    }
+};
+static WinCallbackRegistrar _autoRegister;
+#endif
 
 } // namespace Processing
