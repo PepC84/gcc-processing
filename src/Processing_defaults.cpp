@@ -1,19 +1,16 @@
+// Processing_defaults.cpp
 // =============================================================================
-// Processing_defaults.cpp -- Default event stubs for Windows builds
+// Provides default (no-op) implementations needed for linking on Windows.
 //
-// On Linux/macOS: event callbacks are declared __attribute__((weak)) in
-// Processing.h, so undefined ones silently resolve to nullptr at link time.
+// On Linux/macOS: event callbacks use __attribute__((weak)) declared in
+// Processing.h, so this file compiles to nothing -- the #ifdef guards it.
 //
-// On Windows (MinGW): weak declarations in headers don't work, but weak
-// DEFINITIONS in .cpp files DO work with __attribute__((weak)).
-// This file provides weak no-op definitions for all callbacks.
+// On Windows (MinGW): wireCallbacks() must exist as a symbol.
+// This weak definition is overridden by the real one in IDE.cpp.
+// For user sketches that don't have their own wireCallbacks(), this no-op
+// is used and events are simply not wired (which is fine for simple sketches).
 //
-// The IDE's wireCallbacks() (at the bottom of IDE.cpp) is a strong symbol
-// and automatically wins over this weak stub at link time.
-// User sketches that don't call wireCallbacks() at all get this no-op.
-//
-// Always compile this file on Windows:
-//   g++ ... src/Processing_defaults.cpp ...
+// Always compile this file on ALL platforms -- it's safe and empty on Linux.
 // =============================================================================
 
 #ifdef _WIN32
@@ -21,10 +18,9 @@
 
 namespace Processing {
 
-// Weak definition -- overridden by IDE.cpp's strong wireCallbacks()
-void __attribute__((weak)) wireCallbacks() {
-    // Default: wire nothing. The IDE provides the real implementation.
-}
+// Weak definition -- the linker prefers IDE.cpp's strong version when present.
+// For user sketches without wireCallbacks(), this no-op satisfies the linker.
+void __attribute__((weak)) wireCallbacks() {}
 
 } // namespace Processing
 #endif

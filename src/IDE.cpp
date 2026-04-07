@@ -611,20 +611,20 @@ static void doCompile() {
     }
 
 #ifdef _WIN32
-    std::string ext      = ".exe";
-    std::string defaults = " src/Processing_defaults.cpp";
+    std::string ext = ".exe";
 #else
-    std::string ext      = "";
-    std::string defaults = "";
+    std::string ext = "";
 #endif
 
     std::string outBin = sketchBin + ext;
 
-    // Build the full compile command
+    // Always include Processing_defaults.cpp -- it's empty on Linux/macOS
+    // (guarded by #ifdef _WIN32 inside) so there's no cost, but on Windows
+    // it provides the weak wireCallbacks() stub the linker needs.
     std::string cmd = "g++ -std=c++17"
                       " src/Processing.cpp"
-                      " src/Sketch_run.cpp" +
-                      defaults +
+                      " src/Sketch_run.cpp"
+                      " src/Processing_defaults.cpp"
                       " src/main.cpp"
                       " -o " + outBin +
                       " " + buildFlags +
@@ -1394,12 +1394,16 @@ void mousePressed(){
         // Copy all
         float cbx=(float)(consoleX()+consoleW()-84),cby2=(float)(cy+7),cbw2=76,cbh=16;
         if (mouseX>=cbx && mouseX<=cbx+cbw2 && mouseY>=cby2 && mouseY<=cby2+cbh) {
-            // Copy all output lines to clipboard
+            // Copy ALL lines from ALL terminal tabs to clipboard
             std::string all;
             {
                 std::lock_guard<std::mutex> lk(outMutex);
-                for (auto& l : terminals[activeTab].lines)
-                    all += l + "\n";
+                for (int t = 0; t < (int)terminals.size(); t++) {
+                    if (terminals.size() > 1)
+                        all += "=== " + terminals[t].name + " ===\n";
+                    for (auto& l : terminals[t].lines)
+                        all += l + "\n";
+                }
             }
             if (!all.empty()) {
                 auto* win = glfwGetCurrentContext();
