@@ -1,5 +1,5 @@
 // =============================================================================
-// IDE.cpp  --  Simple++ IDE
+// IDE.cpp  --  ProcessingGL IDE
 // A Processing-style creative coding IDE built with the Processing.h API.
 // =============================================================================
 
@@ -229,8 +229,13 @@ static std::string buildFlags = getDefaultBuildFlags();
 // Sketch process (pipe capture)
 static plat_proc_t       sketchProc    = plat_proc_invalid();
 static std::thread       sketchThread;
+static std::thread       buildThread;
 static std::mutex        outMutex;
 static std::atomic<bool> sketchRunning { false };
+static std::atomic<bool> isBuilding    { false };   // true while g++ is running
+static std::atomic<bool> buildDone     { false };   // flips to true when build finishes
+static std::atomic<bool> buildSucceeded{ false };   // set by build thread on success
+static std::atomic<float> buildProgress{ 0.f };    // 0..1 estimated progress for the bar
 static const int         WRAP_COLS = 120;
 
 // =============================================================================
@@ -691,14 +696,93 @@ static void sketchReaderThread(int /*unused*/) {
 // BUILD & RUN
 // =============================================================================
 
-static void doCompile() {
+// Build thread worker -- runs g++ and streams output into outLines.
+// Runs on a background thread so the IDE stays responsive.
+static void buildWorker(const std::string& cmd, const std::string& outBin) {
+    buildProgress.store(0.05f); // show some immediate progress
+
+#ifdef _WIN32
+    FILE* pipe = _popen(cmd.c_str(), "r");
+#else
+    FILE* pipe = popen(cmd.c_str(), "r");
+#endif
+    if (!pipe) {
+        std::lock_guard<std::mutex> lk(outMutex);
+        outLines.push_back("ERROR: could not launch compiler -- is g++ in PATH?");
+        hasError = true;
+        isBuilding.store(false);
+        buildDone.store(true);
+        buildSucceeded.store(false);
+        buildProgress.store(0.f);
+        return;
+    }
+
+    buildProgress.store(0.15f);
+
+    char buf[512];
+    while (fgets(buf, sizeof(buf), pipe)) {
+        std::string s(buf);
+        while (!s.empty() && (s.back()=='\n'||s.back()=='\r')) s.pop_back();
+        if (!s.empty()) {
+            std::lock_guard<std::mutex> lk(outMutex);
+            if (s.find("error:") != std::string::npos) {
+                hasError = true;
+                buildProgress.store(1.f);   // jump to end on error
+            }
+            outLines.push_back(s);
+            outScroll = std::max(0, (int)outLines.size() - 10);
+        }
+        // Fake incremental progress while compiling
+        float p = buildProgress.load();
+        if (p < 0.90f) buildProgress.store(p + 0.001f);
+    }
+
+#ifdef _WIN32
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+
+    buildProgress.store(0.95f);
+
+    {
+        std::lock_guard<std::mutex> lk(outMutex);
+        if (!hasError) {
+            outLines.push_back("Built: " + outBin + "   (Ctrl+R to run)");
+            buildSucceeded.store(true);
+        } else {
+            int errCount = 0, warnCount = 0;
+            for (auto& ol : outLines) {
+                if (ol.find("error:")   != std::string::npos) errCount++;
+                if (ol.find("warning:") != std::string::npos) warnCount++;
+            }
+            outLines.push_back("Build failed: " + std::to_string(errCount) + " error(s)" +
+                (warnCount > 0 ? ", " + std::to_string(warnCount) + " warning(s)" : ""));
+            buildSucceeded.store(false);
+        }
+        outScroll = std::max(0, (int)outLines.size() - 10);
+    }
+
+    buildProgress.store(1.f);
+    isBuilding.store(false);
+    buildDone.store(true);
+}
+
+// Called from the main thread (button click / Ctrl+B).
+// Starts the build on a background thread and returns immediately.
+static void doCompile(bool thenRun=false) {
+    if (isBuilding.load()) return;  // already building
+
     outLines.clear();
-    hasError  = false;
-    outScroll = 0;
+    hasError   = false;
+    outScroll  = 0;
+    buildDone.store(false);
+    buildSucceeded.store(false);
+    buildProgress.store(0.f);
 
     if (!writeSketch()) return;
 
-    // Derive binary name from current file ("MySketch.cpp" -> "MySketch")
+    // Derive output binary name from current filename
     sketchBin = "SketchApp";
     if (!currentFile.empty()) {
         std::string base = currentFile;
@@ -715,10 +799,9 @@ static void doCompile() {
 #else
     std::string ext = "";
 #endif
-
     std::string outBin = sketchBin + ext;
 
-    // Wrap output path in quotes to handle filenames with spaces
+    // Build the compile command (quote outBin in case it contains spaces)
     std::string cmd =
         "g++ -std=c++17"
         " src/Processing.cpp"
@@ -732,98 +815,69 @@ static void doCompile() {
     outLines.push_back("Building: " + sketchBin);
     outLines.push_back("$ " + cmd);
 
-#ifdef _WIN32
-    FILE* pipe = _popen(cmd.c_str(), "r");
-#else
-    FILE* pipe = popen(cmd.c_str(), "r");
-#endif
-    if (!pipe) {
-        outLines.push_back("ERROR: could not launch compiler -- is g++ in PATH?");
-        hasError = true;
-        return;
-    }
+    isBuilding.store(true);
 
-    char buf[512];
-    while (fgets(buf, sizeof(buf), pipe)) {
-        std::string s(buf);
-        while (!s.empty() && (s.back()=='\n'||s.back()=='\r')) s.pop_back();
-        if (s.find("error:") != std::string::npos) hasError = true;
-        if (!s.empty()) outLines.push_back(s);
-    }
-
-#ifdef _WIN32
-    _pclose(pipe);
-#else
-    pclose(pipe);
-#endif
-
-    if (!hasError) {
-        outLines.push_back("Built: " + outBin + "   (Ctrl+R to run)");
-    } else {
-        int errCount = 0, warnCount = 0;
-        for (auto& ol : outLines) {
-            if (ol.find("error:")   != std::string::npos) errCount++;
-            if (ol.find("warning:") != std::string::npos) warnCount++;
+    // Launch build on background thread, optionally run after
+    buildThread = std::thread([cmd, outBin, thenRun]() {
+        buildWorker(cmd, outBin);
+        // If caller wanted run-after-build, trigger it on success
+        if (thenRun && buildSucceeded.load()) {
+            // Signal main thread to launch sketch
+            // (can't call doRun() from here -- it touches OpenGL)
+            // We set a flag that draw() checks
         }
-        outLines.push_back("Build failed: " + std::to_string(errCount) + " error(s)" +
-            (warnCount > 0 ? ", " + std::to_string(warnCount) + " warning(s)" : ""));
-
-        // Jump cursor to first error line
-        for (auto& ol : outLines) {
-            size_t pos = ol.find("Sketch_run.cpp:");
-            if (pos != std::string::npos) {
-                size_t p2 = pos + 15;
-                int ln = 0;
-                while (p2 < ol.size() && isdigit((unsigned char)ol[p2]))
-                    ln = ln * 10 + (ol[p2++] - '0');
-                if (ln > 0 && ln <= (int)code.size()) {
-                    curLine = ln - 1; curCol = 0;
-                    clamp(); ensureVis();
-                }
-                break;
-            }
-        }
-    }
-    outScroll = std::max(0, (int)outLines.size() - 10);
+    });
+    buildThread.detach();
 }
 
-static void doRun() {
-    doCompile();
-    if (hasError) {
-        outLines.push_back("Not running -- fix errors first.");
-        outScroll = std::max(0, (int)outLines.size() - 10);
-        return;
-    }
+// Set to true by Ctrl+R / Run button.  draw() polls this and launches
+// the sketch once the build thread reports success.
+static bool pendingRun = false;
 
-    stopSketch();
-
+static void launchSketch() {
 #ifdef _WIN32
     std::string bin = sketchBin + ".exe";
 #else
     std::string bin = "./" + sketchBin;
 #endif
-
     if (!plat_file_exists(bin)) {
         outLines.push_back("ERROR: binary not found: " + bin);
         outScroll = std::max(0, (int)outLines.size() - 10);
         return;
     }
-
+    stopSketch();
     sketchProc = plat_proc_start(bin);
     if (!plat_proc_ok(sketchProc)) {
         outLines.push_back("ERROR: failed to launch " + bin);
         outScroll = std::max(0, (int)outLines.size() - 10);
         return;
     }
-
     sketchRunning = true;
-    { std::lock_guard<std::mutex> lk(outMutex);
-      outLines.push_back("Running: " + bin);
-      outLines.push_back("------------------------------------------------------"); }
-
+    {
+        std::lock_guard<std::mutex> lk(outMutex);
+        outLines.push_back("Running: " + bin);
+        outLines.push_back("------------------------------------------------------");
+    }
     sketchThread = std::thread(sketchReaderThread, 0);
     sketchThread.detach();
     outScroll = std::max(0, (int)outLines.size() - 10);
+}
+
+static void doRun() {
+    // Start async build; pendingRun=true tells draw() to launch on success
+    pendingRun = true;
+    doCompile();
+    if (isBuilding.load()) return; // build started async, draw() will launch
+
+    // If build was instant (already cached) handle immediately
+    if (hasError) {
+        pendingRun = false;
+        outLines.push_back("Not running -- fix errors first.");
+        outScroll = std::max(0, (int)outLines.size() - 10);
+        return;
+    }
+
+    launchSketch();
 }
 
 static void doStop() {
@@ -1116,27 +1170,28 @@ static void drawToolbar() {
     iText(terminalPos==TermPos::Right ? "[=]Bottom" : "[|]Right",
           tpx+6, tpy+tph*0.72f, 160, 170, 210, FST);
 
-    // Build button
+    // Build button (greyed out while building)
     float bx = width-196, by = ty+6, bh = TOOLBAR_H-12, bw = 92;
-    bool  bH = mouseX>=bx && mouseX<=bx+bw && mouseY>=by && mouseY<=by+bh;
-    qFill(bx, by, bw, bh, bH?217:160, bH?119:80, bH?87:55);
-    qBorder(bx, by, bw, bh, bH?217:180, bH?119:90, bH?87:55);
-    iText("Build", bx+10, by+bh*0.72f, 255, 235, 225, FSS);
+    bool  bH = !isBuilding.load() && mouseX>=bx && mouseX<=bx+bw && mouseY>=by && mouseY<=by+bh;
+    bool  building = isBuilding.load();
+    qFill(bx, by, bw, bh, building?50:(bH?217:160), building?50:(bH?119:80), building?55:(bH?87:55));
+    qBorder(bx, by, bw, bh, building?70:(bH?217:180), building?70:(bH?119:90), building?75:(bH?87:55));
+    iText(building?"Building...":"Build", bx+6, by+bh*0.72f,
+          building?140:255, building?150:235, building?160:225, FSS);
 
-    // Run button
+    // Run button (greyed out while building)
     float rx = width-96;
-    bool  rH = mouseX>=rx && mouseX<=rx+bw && mouseY>=by && mouseY<=by+bh;
-    qFill(rx, by, bw, bh, rH?25:17, rH?130:108, rH?210:179);
-    qBorder(rx, by, bw, bh, rH?70:40, rH?160:120, rH?220:180);
-    iText("Run", rx+14, by+bh*0.72f, 230, 240, 255, FSS);
+    bool  rH = !isBuilding.load() && mouseX>=rx && mouseX<=rx+bw && mouseY>=by && mouseY<=by+bh;
+    qFill(rx, by, bw, bh, building?30:(rH?25:17), building?30:(rH?130:108), building?35:(rH?210:179));
+    qBorder(rx, by, bw, bh, building?45:( rH?70:40), building?45:(rH?160:120), building?50:(rH?220:180));
+    iText("Run", rx+14, by+bh*0.72f, building?120:230, building?130:240, building?140:255, FSS);
 
-    // Status dot
-    if (sketchRunning)
-        qFill(width-210, by+bh/2-5, 10, 10, 255, 160, 0);
-    else if (hasError)
-        qFill(width-210, by+bh/2-5, 10, 10, 220, 60, 60);
+    // Status dot: orange=running, red=error, green=built OK, blue=building
+    if      (building)       qFill(width-210, by+bh/2-5, 10, 10, 17, 108, 255);
+    else if (sketchRunning)  qFill(width-210, by+bh/2-5, 10, 10, 255, 160, 0);
+    else if (hasError)       qFill(width-210, by+bh/2-5, 10, 10, 220, 60, 60);
     else if (!outLines.empty() && outLines.back().find("Built:") != std::string::npos)
-        qFill(width-210, by+bh/2-5, 10, 10, 60, 200, 60);
+                             qFill(width-210, by+bh/2-5, 10, 10, 60, 200, 60);
 }
 
 // =============================================================================
@@ -1604,7 +1659,7 @@ void setup() {
     size(1080, 740);
     windowResizable(true);
     frameRate(60);
-    windowTitle("Simple++");
+    windowTitle("ProcessingGL");
 
     // Load window icon if present (icon.png or icon.jpg next to the exe)
     // stb_image is used to load the file; GLFW accepts RGBA arrays.
@@ -1637,19 +1692,85 @@ void setup() {
 
     checkInstalled();
     // Tree is populated when user clicks "Open" -- not on startup
-    outLines.push_back("Simple++ ready.");
+    outLines.push_back("ProcessingGL ready.");
     outLines.push_back("Ctrl+B build | Ctrl+R run | Ctrl+. stop | Ctrl+Shift+M serial | Ctrl+Shift+L libs");
+}
+
+// Draw an animated build progress bar overlaid at the bottom of the editor.
+// Only shown while isBuilding is true.
+static void drawBuildProgress() {
+    float progress = buildProgress.load();
+    int   bh = 4;   // bar height in pixels
+    int   by = statusY() - bh;
+    int   bx = sbW();
+    int   bw = editorFullW();
+
+    // Dark background track
+    qFill(bx, by, bw, bh, 20, 20, 28);
+
+    // Filled portion (animated blue)
+    float filled = bw * progress;
+    qFill(bx, by, filled, bh, 17, 108, 179);
+
+    // Animated shimmer on the leading edge
+    float shimX = bx + filled - 12;
+    if (shimX > bx)
+        qFill(shimX, by, 12, bh, 80, 180, 255, 160);
+
+    // "Building..." label in status bar area
+    iText("Building...  " + std::to_string((int)(progress*100)) + "%",
+          bx + 8, by - 4, 140, 160, 220, FST);
 }
 
 void draw() {
     background(30, 30, 30);
+
+    // Poll build completion every frame (safe -- atomics)
+    if (buildDone.load()) {
+        buildDone.store(false);
+        buildProgress.store(0.f);
+
+        // Jump editor to first error line if build failed
+        if (hasError) {
+            std::lock_guard<std::mutex> lk(outMutex);
+            for (auto& ol : outLines) {
+                size_t pos = ol.find("Sketch_run.cpp:");
+                if (pos != std::string::npos) {
+                    size_t p2 = pos + 15;
+                    int ln = 0;
+                    while (p2 < ol.size() && isdigit((unsigned char)ol[p2]))
+                        ln = ln * 10 + (ol[p2++] - '0');
+                    if (ln > 0 && ln <= (int)code.size()) {
+                        curLine = ln-1; curCol = 0;
+                        clamp(); ensureVis();
+                    }
+                    break;
+                }
+            }
+        }
+
+        // If Ctrl+R was pressed, launch now that build succeeded
+        if (pendingRun) {
+            pendingRun = false;
+            if (buildSucceeded.load()) launchSketch();
+            else {
+                outLines.push_back("Not running -- fix errors first.");
+                outScroll = std::max(0, (int)outLines.size()-10);
+            }
+        }
+    }
+
     drawSidebar();
     if (!fpShow) { drawEditor(); drawStatus(); }
     drawConsole();
+
+    // Build progress bar overlaid on editor while building
+    if (isBuilding.load()) drawBuildProgress();
+
     if (fpShow)     drawFilePicker();
     if (showSerial) drawSerialMonitor();
     if (showLibMgr) drawLibMgr();
-    drawToolbar();   // always on top
+    drawToolbar();   // chrome always on top
     drawMenuBar();
 }
 
@@ -1832,8 +1953,10 @@ void mousePressed() {
     // --- Toolbar buttons ---
     int ty=MENUBAR_H; float by=ty+6, bh=TOOLBAR_H-12, bw=92;
     if (mouseY>=by&&mouseY<=by+bh) {
-        if (mouseX>=width-196&&mouseX<=width-196+bw) { doCompile(); return; }
-        if (mouseX>=width-96 &&mouseX<=width-96+bw)  { doRun();     return; }
+        if (!isBuilding.load()) {
+            if (mouseX>=width-196&&mouseX<=width-196+bw) { doCompile(); return; }
+            if (mouseX>=width-96 &&mouseX<=width-96+bw)  { doRun();     return; }
+        }
         if (mouseX>=width-300&&mouseX<=width-214)    { terminalPos=(terminalPos==TermPos::Bottom)?TermPos::Right:TermPos::Bottom; return; }
     }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Simple++ -- Linux / macOS Setup
+# ProcessingGL -- Linux / macOS Setup
 # Run: chmod +x setup.sh && ./setup.sh
 # =============================================================================
 set -e
@@ -17,7 +17,7 @@ die()  { echo -e "${R}[ERR ]${N} $1"; exit 1; }
 
 echo ""
 echo -e "${C} +============================================+"
-echo -e " |   Simple++ -- Linux/macOS Setup      |"
+echo -e " |   ProcessingGL -- Linux/macOS Setup      |"
 echo -e " +============================================+${N}"
 echo ""
 
@@ -143,9 +143,9 @@ g++ -std=c++17 \\
     src/Processing.cpp \\
     src/IDE.cpp \\
     src/main.cpp \\
-    -o simplepp \\
+    -o processinggl \\
     $LD
-echo "[build] Done: ./simplepp"
+echo "[build] Done: ./processinggl"
 BIDE
 chmod +x buildSimplepp.sh; ok "buildSimplepp.sh"
 
@@ -197,26 +197,26 @@ if [[ $PLAT == arch ]]; then
         || g++ -std=c++17 src/Processing.cpp src/IDE.cpp src/main.cpp \
             -o ide_appimage $LD -O2
 
-        APP="Simple++"; APPDIR="$SCRIPT_DIR/${APP}.AppDir"
-        rm -rf "$APPDIR"; mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/Simple++"
+        APP="ProcessingGL"; APPDIR="$SCRIPT_DIR/${APP}.AppDir"
+        rm -rf "$APPDIR"; mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/ProcessingGL"
         cp ide_appimage "$APPDIR/usr/bin/ide"
-        [ -f default.ttf ] && cp default.ttf "$APPDIR/usr/share/Simple++/"
-        for h in src/stb_truetype.h src/stb_image.h; do [ -f "$h" ] && cp "$h" "$APPDIR/usr/share/Simple++/"; done
+        [ -f default.ttf ] && cp default.ttf "$APPDIR/usr/share/ProcessingGL/"
+        for h in src/stb_truetype.h src/stb_image.h; do [ -f "$h" ] && cp "$h" "$APPDIR/usr/share/ProcessingGL/"; done
 
         cat > "$APPDIR/AppRun" << 'AR'
 #!/usr/bin/env bash
 HERE="$(dirname "$(readlink -f "$0")")"
-DIR="$HOME/Simple++"; mkdir -p "$DIR/src"
+DIR="$HOME/ProcessingGL"; mkdir -p "$DIR/src"
 for f in stb_truetype.h stb_image.h; do
-    [ -f "$DIR/src/$f" ] || cp "$HERE/usr/share/Simple++/$f" "$DIR/src/$f" 2>/dev/null || true
+    [ -f "$DIR/src/$f" ] || cp "$HERE/usr/share/ProcessingGL/$f" "$DIR/src/$f" 2>/dev/null || true
 done
-[ -f "$DIR/default.ttf" ] || cp "$HERE/usr/share/Simple++/default.ttf" "$DIR/default.ttf" 2>/dev/null || true
+[ -f "$DIR/default.ttf" ] || cp "$HERE/usr/share/ProcessingGL/default.ttf" "$DIR/default.ttf" 2>/dev/null || true
 [ -f "$DIR/src/main.cpp" ] || printf '#include "Processing.h"\nint main(){Processing::run();return 0;}\n' > "$DIR/src/main.cpp"
 cd "$DIR"; exec "$HERE/usr/bin/ide" "$@"
 AR
         chmod +x "$APPDIR/AppRun"
-        printf '[Desktop Entry]\nName=Simple++ IDE\nExec=ide\nIcon=Simple++\nType=Application\nCategories=Development;\n' > "$APPDIR/Simple++.desktop"
-        touch "$APPDIR/Simple++.png"
+        printf '[Desktop Entry]\nName=ProcessingGL IDE\nExec=ide\nIcon=ProcessingGL\nType=Application\nCategories=Development;\n' > "$APPDIR/ProcessingGL.desktop"
+        touch "$APPDIR/ProcessingGL.png"
 
         if ! command -v appimagetool &>/dev/null; then
             curl -sL https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
@@ -242,4 +242,4 @@ echo -e "  ${C}Ctrl+Shift+M${N}  serial monitor"
 echo -e "  ${C}Ctrl+Shift+L${N}  library manager"
 echo -e "  ${C}Ctrl+Shift+V${N}  vim mode"
 echo ""
-exec ./simplepp
+exec ./processinggl

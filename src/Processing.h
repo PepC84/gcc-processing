@@ -1,8 +1,8 @@
 #pragma once
 // =============================================================================
-// Processing.h  --  Simple++ API
+// Processing.h  --  ProcessingGL API
 // =============================================================================
-// Simple++ is a C++ creative coding framework inspired by Processing (Java).
+// ProcessingGL is a C++ creative coding framework inspired by Processing (Java).
 // It exposes a familiar draw-loop API backed by OpenGL/GLFW/GLEW.
 //
 // HOW TO USE:
@@ -16,7 +16,7 @@
 //   Processing.h    -- This file. API declarations, inline helpers, classes.
 //   Processing.cpp  -- Implementation of all declared functions.
 //   Platform.h      -- OS abstraction (file dialogs, serial, process, sleep).
-//   IDE.cpp         -- The Simple++ IDE (sketch editor, build, run, terminal).
+//   IDE.cpp         -- The ProcessingGL IDE (sketch editor, build, run, terminal).
 // =============================================================================
 
 // ---------------------------------------------------------------------------
