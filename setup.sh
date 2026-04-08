@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# gcc-processing -- Linux / macOS Setup
+# Simple++ -- Linux / macOS Setup
 # Run: chmod +x setup.sh && ./setup.sh
 # =============================================================================
 set -e
@@ -17,7 +17,7 @@ die()  { echo -e "${R}[ERR ]${N} $1"; exit 1; }
 
 echo ""
 echo -e "${C} +============================================+"
-echo -e " |   gcc-processing -- Linux/macOS Setup      |"
+echo -e " |   Simple++ -- Linux/macOS Setup      |"
 echo -e " +============================================+${N}"
 echo ""
 
@@ -30,7 +30,7 @@ elif command -v pacman  &>/dev/null; then PLAT=arch;     info "Linux -- Arch (pa
 elif command -v apt-get &>/dev/null; then PLAT=debian;   info "Linux -- Debian/Ubuntu (apt)"
 elif command -v dnf     &>/dev/null; then PLAT=fedora;   info "Linux -- Fedora (dnf)"
 elif command -v zypper  &>/dev/null; then PLAT=opensuse; info "Linux -- openSUSE (zypper)"
-else die "Unknown distro. Install g++, libglfw, libGLEW, libGL manually then run: bash buildIDE.sh"; fi
+else die "Unknown distro. Install g++, libglfw, libGLEW, libGL manually then run: bash buildSimplepp.sh"; fi
 
 # --- Install system packages -----------------------------------------------
 step "Installing dependencies"
@@ -135,7 +135,7 @@ else
     LD="-lglfw -lGLEW -lGL -lGLU -lm -pthread"
 fi
 
-cat > buildIDE.sh << BIDE
+cat > buildSimplepp.sh << BIDE
 #!/usr/bin/env bash
 set -e
 echo "[build] Compiling IDE..."
@@ -143,11 +143,11 @@ g++ -std=c++17 \\
     src/Processing.cpp \\
     src/IDE.cpp \\
     src/main.cpp \\
-    -o ide \\
+    -o simplepp \\
     $LD
-echo "[build] Done: ./ide"
+echo "[build] Done: ./simplepp"
 BIDE
-chmod +x buildIDE.sh; ok "buildIDE.sh"
+chmod +x buildSimplepp.sh; ok "buildSimplepp.sh"
 
 cat > build.sh << BUILD
 #!/usr/bin/env bash
@@ -184,7 +184,7 @@ done
 
 # --- Build IDE -------------------------------------------------------------
 step "Building IDE"
-bash buildIDE.sh
+bash buildSimplepp.sh
 
 # --- Optional AppImage (Arch only) -----------------------------------------
 if [[ $PLAT == arch ]]; then
@@ -197,26 +197,26 @@ if [[ $PLAT == arch ]]; then
         || g++ -std=c++17 src/Processing.cpp src/IDE.cpp src/main.cpp \
             -o ide_appimage $LD -O2
 
-        APP="gcc-processing"; APPDIR="$SCRIPT_DIR/${APP}.AppDir"
-        rm -rf "$APPDIR"; mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/gcc-processing"
+        APP="Simple++"; APPDIR="$SCRIPT_DIR/${APP}.AppDir"
+        rm -rf "$APPDIR"; mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/Simple++"
         cp ide_appimage "$APPDIR/usr/bin/ide"
-        [ -f default.ttf ] && cp default.ttf "$APPDIR/usr/share/gcc-processing/"
-        for h in src/stb_truetype.h src/stb_image.h; do [ -f "$h" ] && cp "$h" "$APPDIR/usr/share/gcc-processing/"; done
+        [ -f default.ttf ] && cp default.ttf "$APPDIR/usr/share/Simple++/"
+        for h in src/stb_truetype.h src/stb_image.h; do [ -f "$h" ] && cp "$h" "$APPDIR/usr/share/Simple++/"; done
 
         cat > "$APPDIR/AppRun" << 'AR'
 #!/usr/bin/env bash
 HERE="$(dirname "$(readlink -f "$0")")"
-DIR="$HOME/gcc-processing"; mkdir -p "$DIR/src"
+DIR="$HOME/Simple++"; mkdir -p "$DIR/src"
 for f in stb_truetype.h stb_image.h; do
-    [ -f "$DIR/src/$f" ] || cp "$HERE/usr/share/gcc-processing/$f" "$DIR/src/$f" 2>/dev/null || true
+    [ -f "$DIR/src/$f" ] || cp "$HERE/usr/share/Simple++/$f" "$DIR/src/$f" 2>/dev/null || true
 done
-[ -f "$DIR/default.ttf" ] || cp "$HERE/usr/share/gcc-processing/default.ttf" "$DIR/default.ttf" 2>/dev/null || true
+[ -f "$DIR/default.ttf" ] || cp "$HERE/usr/share/Simple++/default.ttf" "$DIR/default.ttf" 2>/dev/null || true
 [ -f "$DIR/src/main.cpp" ] || printf '#include "Processing.h"\nint main(){Processing::run();return 0;}\n' > "$DIR/src/main.cpp"
 cd "$DIR"; exec "$HERE/usr/bin/ide" "$@"
 AR
         chmod +x "$APPDIR/AppRun"
-        printf '[Desktop Entry]\nName=gcc-processing IDE\nExec=ide\nIcon=gcc-processing\nType=Application\nCategories=Development;\n' > "$APPDIR/gcc-processing.desktop"
-        touch "$APPDIR/gcc-processing.png"
+        printf '[Desktop Entry]\nName=Simple++ IDE\nExec=ide\nIcon=Simple++\nType=Application\nCategories=Development;\n' > "$APPDIR/Simple++.desktop"
+        touch "$APPDIR/Simple++.png"
 
         if ! command -v appimagetool &>/dev/null; then
             curl -sL https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
@@ -242,4 +242,4 @@ echo -e "  ${C}Ctrl+Shift+M${N}  serial monitor"
 echo -e "  ${C}Ctrl+Shift+L${N}  library manager"
 echo -e "  ${C}Ctrl+Shift+V${N}  vim mode"
 echo ""
-exec ./ide
+exec ./simplepp

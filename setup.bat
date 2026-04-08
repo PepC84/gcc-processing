@@ -1,13 +1,13 @@
 @echo off
 setlocal EnableDelayedExpansion
 :: =============================================================================
-:: gcc-processing -- Windows Setup
-:: Double-click this file. It installs MSYS2 if needed, then builds ide.exe.
+:: Simple++ -- Windows Setup
+:: Double-click this file. It installs MSYS2 if needed, then builds simplepp.exe.
 :: =============================================================================
 
 echo.
 echo  +============================================+
-echo  ^|   gcc-processing -- Windows Setup         ^|
+echo  ^|   Simple++ -- Windows Setup         ^|
 echo  +============================================+
 echo.
 
@@ -32,9 +32,30 @@ if "!MSYS2!" NEQ "" goto :have_msys2
 :: --- MSYS2 not found -- download and install it ----------------------------
 echo [INFO] MSYS2 not found. Downloading installer (~90 MB)...
 echo.
+
 set "INST=%TEMP%\msys2-installer.exe"
+
 powershell -NoProfile -Command ^
-    "$p='SilentlyContinue';$ProgressPreference=$p; [Net.ServicePointManager]::SecurityProtocol='Tls12'; Invoke-WebRequest -Uri 'https://github.com/msys2/msys2-installer/releases/download/2024-01-13/msys2-x86_64-20240113.exe' -OutFile '%INST%'"
+"$url = 'https://github.com/msys2/msys2-installer/releases/download/2024-01-13/msys2-x86_64-20240113.exe'; ^
+ $out = '%INST%'; ^
+ [Net.ServicePointManager]::SecurityProtocol = 'Tls12'; ^
+ $wc = New-Object System.Net.WebClient; ^
+ $sw = [System.Diagnostics.Stopwatch]::StartNew(); ^
+ $last = 0; ^
+ $wc.DownloadProgressChanged += { ^
+    $percent = $_.ProgressPercentage; ^
+    $bytes = $_.BytesReceived; ^
+    $total = $_.TotalBytesToReceive; ^
+    $speed = if ($sw.Elapsed.TotalSeconds -gt 0) { ($bytes - $last) / ($sw.Elapsed.TotalSeconds) } else { 0 }; ^
+    $last = $bytes; ^
+    $sw.Restart(); ^
+    $mbps = [math]::Round($speed / 1MB, 2); ^
+    $mb = [math]::Round($bytes / 1MB, 2); ^
+    $mbtotal = if ($total -gt 0) { [math]::Round($total / 1MB, 2) } else { '?' }; ^
+    Write-Progress -Activity 'Downloading MSYS2' -Status \"$mb MB / $mbtotal MB ($mbps MB/s)\" -PercentComplete $percent; ^
+ }; ^
+ $wc.DownloadFileAsync($url, $out); ^
+ while ($wc.IsBusy) { Start-Sleep -Milliseconds 100 }"
 
 if not exist "%INST%" (
     echo [ERR] Download failed. Check your connection or install MSYS2 manually from https://www.msys2.org/
@@ -68,10 +89,9 @@ set "PATH=!MINGW_BIN!;!MSYS2!\usr\bin;%PATH%"
 :: ---------------------------------------------------------------------------
 echo.
 echo [INFO] Updating package database...
-:: Remove stale lock file if present (safe when no other pacman is running)
-if exist "!MSYS2!ar\lib\pacman\db.lck" (
+if exist "!MSYS2!\var\lib\pacman\db.lck" (
     echo [INFO] Removing stale pacman lock...
-    del /f /q "!MSYS2!ar\lib\pacman\db.lck" 2>nul
+    del /f /q "!MSYS2!\var\lib\pacman\db.lck" 2>nul
 )
 "!BASH!" -lc "pacman -Sy --noconfirm 2>&1 | tail -5"
 
@@ -165,16 +185,16 @@ echo [INFO] Writing build scripts...
         src\IDE.cpp ^
         src\Processing_defaults.cpp ^
         src\main.cpp ^
-        -o ide.exe ^
+        -o simplepp.exe ^
         -lglfw3 -lglew32 -lopengl32 -lglu32 ^
         -lcomdlg32 -lshell32 -lole32 -luuid ^
         -pthread -O2 ^
         -D_USE_MATH_DEFINES ^
         -mwindows
     echo if %%ERRORLEVEL%% neq 0 ^( echo [ERR] Build failed. ^& pause ^& exit /b 1 ^)
-    echo echo [build] Done: ide.exe
-) > buildIDE.bat
-echo [OK]  buildIDE.bat
+    echo echo [build] Done: simplepp.exe
+) > buildSimplepp.bat
+echo [OK]  buildSimplepp.bat
 
 (
     echo @echo off
@@ -197,8 +217,6 @@ echo [OK]  buildIDE.bat
 ) > build.bat
 echo [OK]  build.bat
 
-:: Windows: .bat files only (no .sh generated here)
-
 :: ---------------------------------------------------------------------------
 :: 8. Build the IDE
 :: ---------------------------------------------------------------------------
@@ -209,7 +227,7 @@ echo [INFO] Building IDE...
     src\IDE.cpp ^
     src\Processing_defaults.cpp ^
     src\main.cpp ^
-    -o ide.exe ^
+    -o simplepp.exe ^
     -lglfw3 -lglew32 -lopengl32 -lglu32 ^
     -lcomdlg32 -lshell32 -lole32 -luuid ^
     -mwindows -pthread -O2 ^
@@ -220,7 +238,7 @@ if %ERRORLEVEL% neq 0 (
     echo [ERR] Build failed -- see errors above.
     pause & exit /b 1
 )
-echo [OK]  ide.exe built
+echo [OK]  simplepp.exe built
 
 :: ---------------------------------------------------------------------------
 :: 9. Collect DLLs
@@ -242,8 +260,7 @@ for %%D in (
     )
 )
 
-:: Auto-collect any additional DLLs the binary links against (via bash/objdump)
-"!BASH!" -lc "cd '$(cygpath -u "%CD%")' && objdump -p ide.exe 2>/dev/null | grep 'DLL Name' | awk '{print $3}' | while read dll; do [ -f /mingw64/bin/$dll ] && [ ! -f ./$dll ] && cp /mingw64/bin/$dll . && echo "[OK]  $dll (auto)"; done"
+"!BASH!" -lc "cd '$(cygpath -u "%CD%")' && objdump -p simplepp.exe 2>/dev/null | grep 'DLL Name' | awk '{print $3}' | while read dll; do [ -f /mingw64/bin/$dll ] && [ ! -f ./$dll ] && cp /mingw64/bin/$dll . && echo "[OK]  $dll (auto)"; done"
 
 :: ---------------------------------------------------------------------------
 :: 10. Done
@@ -253,11 +270,10 @@ echo  +============================================+
 echo  ^|   Setup complete!                         ^|
 echo  +============================================+
 echo.
-echo   Run IDE:       double-click ide.exe
+echo   Run IDE:       double-click simplepp.exe
 echo   Build sketch:  build.bat MySketch.cpp
-echo   Rebuild IDE:   buildIDE.bat
+echo   Rebuild IDE:   buildSimplepp.bat
 echo.
 pause
-:: Launch IDE
-:: Run "ide.exe --debug" from a terminal to see error output
-start "gcc-processing IDE" ide.exe
+
+start "Simple++ IDE" simplepp.exe

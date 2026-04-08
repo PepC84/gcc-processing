@@ -1,11 +1,11 @@
 #include "Processing.h"
 namespace Processing {
-// -- run once ----------------------------------------
+// run once
 void setup() {
   size(640, 360);
 }
 
-// -- loops forever -----------------------------------
+// loops forever
 void draw() {
   background(102);
   fill(255);

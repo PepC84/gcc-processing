@@ -1,5 +1,5 @@
 // =============================================================================
-// IDE.cpp  --  gcc-processing IDE
+// IDE.cpp  --  Simple++ IDE
 // A Processing-style creative coding IDE built with the Processing.h API.
 // =============================================================================
 
@@ -533,8 +533,33 @@ static void openFile(const std::string& path) {
     outLines.push_back("Opened: " + path);
 }
 
+// File picker state (used as fallback when system dialog unavailable)
+static bool fpShow  = false;
+static bool fpSave  = false;
+static std::string fpInput = "";
+
+// Opens the OS native file picker dialog.
+// Returns the chosen path, or "" if cancelled.
 static std::string sysFileDialog(bool save, const std::string& def = "") {
     return plat_file_dialog(save, def);
+}
+
+// Open or save using system dialog; fall back to inline picker if unsupported.
+static void doOpen() {
+    std::string path = plat_file_dialog(false, "");
+    if (!path.empty()) openFile(path);
+    else { fpShow=true; fpSave=false; fpInput=""; }  // fallback
+}
+
+static void doSaveAs(const std::string& def = "") {
+    std::string path = plat_file_dialog(true, def);
+    if (!path.empty()) saveFile(path);
+    else { fpShow=true; fpSave=true; fpInput=def; }  // fallback
+}
+
+static void doSave() {
+    if (currentFile.empty()) doSaveAs();
+    else saveFile(currentFile);
 }
 
 static std::vector<std::string> listSketches() {
@@ -693,14 +718,14 @@ static void doCompile() {
 
     std::string outBin = sketchBin + ext;
 
-    // Always include Processing_defaults.cpp (empty on Linux, stubs on Windows)
+    // Wrap output path in quotes to handle filenames with spaces
     std::string cmd =
         "g++ -std=c++17"
         " src/Processing.cpp"
         " src/Sketch_run.cpp"
         " src/Processing_defaults.cpp"
         " src/main.cpp"
-        " -o " + outBin +
+        " -o "" + outBin + """ +
         " " + buildFlags +
         " 2>&1";
 
@@ -977,9 +1002,14 @@ static void drawSidebar() {
     int treeTop = editorY() + 52;
     float rowH  = FSS * 1.7f;
     int   vis   = (int)((height - treeTop) / rowH);
-    if (ftEntries.empty()) populateTree();
-    ftScroll = std::max(0, std::min(ftScroll, std::max(0, (int)ftEntries.size() - vis)));
 
+    // Show hint when no folder opened yet
+    if (ftEntries.empty()) {
+        iText("Click Open to",  10, treeTop + rowH,      100, 130, 170, FST);
+        iText("browse files.",  10, treeTop + rowH*2.2f, 100, 130, 170, FST);
+    }
+
+    ftScroll = std::max(0, std::min(ftScroll, std::max(0, (int)ftEntries.size() - vis)));
     for (int i = 0; i < vis; i++) {
         int fi = ftScroll + i;
         if (fi >= (int)ftEntries.size()) break;
@@ -1290,12 +1320,20 @@ static void drawConsole() {
         iText("Stop", sx+14, sy2+sh*0.82f, 255, 180, 180, 10.0f);
     }
 
-    // Copy All button
-    float cbx = cx+cw-84, cby = cy+7, cbw = 76, cbh = 16;
+    // Copy All button -- drawn BELOW the tab bar so its Y range doesn't
+    // overlap the tab-bar click area (cy+4 .. cy+4+TAB_H).
+    // Uses a fixed dark-blue background so it's always visible.
+    float cbx = cx+cw-84;
+    float cby = cy + 4 + TAB_H + 2;  // just below tab bar
+    float cbw = 76;
+    float cbh = 14;
     bool  cbH = mouseX>=cbx && mouseX<=cbx+cbw && mouseY>=cby && mouseY<=cby+cbh;
-    qFill(cbx, cby, cbw, cbh, cbH?50:34, cbH?52:36, cbH?66:50);
-    qBorder(cbx, cby, cbw, cbh, 72, 72, 72);
-    iText("Copy All", cbx+6, cby+cbh*0.82f, 172, 177, 212, 10.0f);
+    // Background: always dark blue (visible even without hover)
+    qFill(cbx, cby, cbw, cbh, 22, 28, 55);
+    // Border: brighter blue on hover, dim otherwise
+    qBorder(cbx, cby, cbw, cbh, cbH?80:45, cbH?130:65, cbH?220:120);
+    // Text: always white-ish, brighter on hover
+    iText("Copy All", cbx+6, cby+cbh*0.85f, cbH?240:190, cbH?245:198, cbH?255:220, 10.0f);
 
     // Output lines
     auto& tlines  = terminals[activeTab].lines;
@@ -1533,8 +1571,6 @@ static void drawLibMgr() {
 // FILE PICKER (inline)
 // =============================================================================
 
-static bool fpShow=false, fpSave=false;
-static std::string fpInput="";
 
 static void drawFilePicker() {
     int cy = consoleY();
@@ -1568,9 +1604,40 @@ void setup() {
     size(1080, 740);
     windowResizable(true);
     frameRate(60);
+    windowTitle("Simple++");
+
+    // Load window icon if present (icon.png or icon.jpg next to the exe)
+    // stb_image is used to load the file; GLFW accepts RGBA arrays.
+    {
+        static const char* ICON_PATHS[] = { "icon.png","icon.jpg","icon.bmp",nullptr };
+        for (int i=0; ICON_PATHS[i]; i++) {
+            if (plat_file_exists(ICON_PATHS[i])) {
+                PImage* img = loadImage(ICON_PATHS[i]);
+                if (img && img->texID) {
+                    // Convert ARGB pixels to RGBA for GLFW
+                    std::vector<unsigned char> rgba(img->width * img->height * 4);
+                    for (int p=0; p<img->width*img->height; p++) {
+                        unsigned int px = img->pixels[p];
+                        rgba[p*4+0] = (px>>16)&0xFF;
+                        rgba[p*4+1] = (px>>8) &0xFF;
+                        rgba[p*4+2] =  px     &0xFF;
+                        rgba[p*4+3] = (px>>24)&0xFF;
+                    }
+                    GLFWimage glfwImg;
+                    glfwImg.width  = img->width;
+                    glfwImg.height = img->height;
+                    glfwImg.pixels = rgba.data();
+                    auto* win = glfwGetCurrentContext();
+                    if (win) glfwSetWindowIcon(win, 1, &glfwImg);
+                }
+                break;
+            }
+        }
+    }
+
     checkInstalled();
-    populateTree();
-    outLines.push_back("gcc-processing IDE ready.");
+    // Tree is populated when user clicks "Open" -- not on startup
+    outLines.push_back("Simple++ ready.");
     outLines.push_back("Ctrl+B build | Ctrl+R run | Ctrl+. stop | Ctrl+Shift+M serial | Ctrl+Shift+L libs");
 }
 
@@ -1704,9 +1771,8 @@ void mousePressed() {
         int cy=consoleY();
         float bbx=width-78,bby=cy+25,bbw=68,bbh=26;
         if (mouseX>=bbx&&mouseX<=bbx+bbw&&mouseY>=bby&&mouseY<=bby+bbh) {
-            std::string p=sysFileDialog(fpSave,fpSave?fpInput:"");
-            if (!p.empty()) { if(fpSave)saveFile(p);else openFile(p); fpShow=false; }
-            return;
+            if (fpSave) doSaveAs(fpInput); else doOpen();
+            fpShow=false; return;
         }
         auto files=listSketches();
         for (int i=0;i<(int)files.size()&&i<6;i++) {
@@ -1743,9 +1809,9 @@ void mousePressed() {
             if (mouseX>=mx&&mouseX<=mx+pw&&mouseY>=ry&&mouseY<=ry+22&&items[i].label!="---") {
                 std::string lbl=items[i].label; openMenu=Menu::None;
                 if      (lbl=="New")                newFile();
-                else if (lbl=="Open...")            {fpShow=true;fpSave=false;fpInput="";}
-                else if (lbl=="Save")               {if(currentFile.empty()){fpShow=true;fpSave=true;fpInput="";}else saveFile(currentFile);}
-                else if (lbl=="Save As...")         {fpShow=true;fpSave=true;fpInput=currentFile;}
+                else if (lbl=="Open...")            doOpen();
+                else if (lbl=="Save")               doSave();
+                else if (lbl=="Save As...")         doSaveAs(currentFile);
                 else if (lbl=="Exit")               {stopSketch();exit_sketch();}
                 else if (lbl=="Build")              doCompile();
                 else if (lbl=="Run")                doRun();
@@ -1798,7 +1864,7 @@ void mousePressed() {
         }
 
         // Copy All -- copies every line from every tab
-        float cbx=(float)(consoleX()+consoleW()-84), cby2=(float)(cy+7), cbw2=76, cbh=16;
+        float cbx=(float)(consoleX()+consoleW()-84), cby2=(float)(cy+4+TAB_H+2), cbw2=76, cbh=14;
         if (mouseX>=cbx&&mouseX<=cbx+cbw2&&mouseY>=cby2&&mouseY<=cby2+cbh) {
             std::string all;
             { std::lock_guard<std::mutex> lk(outMutex);
@@ -2041,8 +2107,8 @@ void keyPressed() {
     // --- Ctrl shortcuts ---
     if (ctrl) {
         if (keyCode==GLFW_KEY_N) { newFile(); return; }
-        if (keyCode==GLFW_KEY_O) { fpShow=true;fpSave=false;fpInput=""; return; }
-        if (keyCode==GLFW_KEY_S) { if(shift){fpShow=true;fpSave=true;fpInput=currentFile;}else if(currentFile.empty()){fpShow=true;fpSave=true;fpInput="";}else saveFile(currentFile); return; }
+        if (keyCode==GLFW_KEY_O) { doOpen(); return; }
+        if (keyCode==GLFW_KEY_S) { if(shift) doSaveAs(currentFile); else doSave(); return; }
         if (keyCode==GLFW_KEY_B) { doCompile(); return; }
         if (keyCode==GLFW_KEY_R) { doRun(); return; }
         if (keyCode==GLFW_KEY_M&&shift) { showSerial=true; return; }
@@ -2127,7 +2193,7 @@ void mouseMoved()   {}
 void keyReleased()  {}
 void windowMoved()  {}
 void mouseClicked() {}
-void windowResized() { if (ftEntries.empty()) populateTree(); }
+void windowResized() { /* tree populated explicitly via Open button */ }
 
 // =============================================================================
 // WINDOWS EVENT WIRING
