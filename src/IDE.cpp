@@ -92,7 +92,7 @@ static int  termSideAnchorW       = 0;
 struct FTEntry { std::string name; bool isDir; bool expanded; int depth; };
 static std::vector<FTEntry> ftEntries;
 static int   ftScroll = 0;
-static std::string ftRoot = ".";
+static std::string ftRoot = "files";
 
 // List a directory -- returns {name, isDir} pairs
 static std::vector<std::pair<std::string,bool>> listDir(const std::string& path) {
@@ -265,6 +265,92 @@ static VimState vimState        = VimState::NORMAL;
 static int      vimAnchorLine   = 0;
 static int      vimAnchorCol    = 0;
 static std::string vimCmd       = "";
+
+// -- Vim tab panels --------------------------------------------------------
+// The "Vim" tab in the console area shows two sub-panels:
+//   "Binds"  -- a live-editable key binding reference file
+//   "Help"   -- a read-only cheat sheet of every supported vim operation
+enum class VimPanel { Binds, Help };
+static VimPanel vimPanel        = VimPanel::Help;
+static bool     showVimTab      = false;    // true when Vim tab is active
+// The binds file is a simple text buffer the user can edit
+static std::vector<std::string> vimBindsCode = {
+    "// ProcessingGL Vim Key Bindings",
+    "// Edit this file to document your custom binds.",
+    "// These are the default bindings -- they cannot be changed here,",
+    "// but you can add notes or reminders for your own mappings.",
+    "",
+    "// --- Normal mode motions ---",
+    "h / l         left / right",
+    "j / k         down / up",
+    "w             jump to start of next word",
+    "b             jump to start of previous word",
+    "e             jump to end of word",
+    "0             start of line",
+    "$             end of line",
+    "^             first non-blank character",
+    "gg            go to first line",
+    "G             go to last line",
+    "<n>G          go to line n",
+    "Ctrl+d / f    page down (half / full)",
+    "Ctrl+u / b    page up   (half / full)",
+    "",
+    "// --- Insert mode ---",
+    "i             insert before cursor",
+    "I             insert at start of line",
+    "a             insert after cursor",
+    "A             insert at end of line",
+    "o             open line below",
+    "O             open line above",
+    "Esc           return to Normal mode",
+    "",
+    "// --- Editing (Normal mode) ---",
+    "x             delete character under cursor",
+    "X             delete character before cursor",
+    "r<c>          replace character under cursor with c",
+    "~             toggle case",
+    "dd            delete current line (into clipboard)",
+    "D             delete to end of line",
+    "yy / Y        yank current line",
+    "p             paste below current line",
+    "P             paste above current line",
+    "cc / S        change entire line",
+    "C             change to end of line",
+    "s             substitute character",
+    "J             join line below to current",
+    "u             undo",
+    "Ctrl+r        redo",
+    ">             indent line",
+    "<             de-indent line",
+    "",
+    "// --- Visual mode ---",
+    "v             start character visual mode",
+    "V             start line visual mode",
+    "Esc           cancel selection",
+    "d / x         delete selection",
+    "y             yank selection",
+    "c             change selection",
+    "> / <         indent / de-indent selection",
+    "",
+    "// --- Clipboard ---",
+    "Ctrl+c        copy selection",
+    "Ctrl+x        cut selection",
+    "Ctrl+v        paste",
+    "",
+    "// --- File / IDE shortcuts ---",
+    "Ctrl+s        save",
+    "Ctrl+Shift+s  save as",
+    "Ctrl+o        open",
+    "Ctrl+n        new sketch",
+    "Ctrl+b        build",
+    "Ctrl+r        build and run",
+    "Ctrl+.        stop sketch",
+    "Ctrl+/        toggle comment",
+    "Ctrl+Shift+f  auto-format",
+    "Ctrl+= / -    increase / decrease font size",
+};
+static int vimBindsScroll       = 0;
+static int vimHelpScroll        = 0;
 
 // =============================================================================
 // MENU STATE
@@ -612,14 +698,44 @@ static bool writeSketch() {
         hasError = true;
         return false;
     }
-    bool hasNS = false;
-    for (auto& l : code)
-        if (l.find("namespace Processing") != std::string::npos) { hasNS = true; break; }
+
+    // Detect sketch mode -- same rules as Processing Java:
+    //   - If the sketch defines void setup() or void draw(), it is a
+    //     "structured" sketch and we wrap it in namespace Processing only.
+    //   - If neither is present, it is a "static" or "top-level" sketch
+    //     (like the Mandelbrot example) where all code sits outside any
+    //     function. We wrap the entire body in setup() { ... } so it
+    //     compiles as valid C++. draw() is left as a no-op (noLoop()
+    //     should be called by the sketch if it doesn't want looping).
+    bool hasSetup = false;
+    bool hasDraw  = false;
+    bool hasNS    = false;
+    for (auto& l : code) {
+        // Look for function definitions (not just mentions)
+        if (l.find("void setup(") != std::string::npos) hasSetup = true;
+        if (l.find("void draw(")  != std::string::npos) hasDraw  = true;
+        if (l.find("namespace Processing") != std::string::npos) hasNS = true;
+    }
+
+    bool isTopLevel = !hasSetup && !hasDraw && !hasNS;
 
     f << "#include \"Processing.h\"\n";
-    if (!hasNS) f << "namespace Processing {\n";
-    for (auto& l : code) f << sanitizeLine(l) << "\n";
-    if (!hasNS) f << "} // namespace Processing\n";
+    f << "namespace Processing {\n";
+
+    if (isTopLevel) {
+        // Wrap the whole sketch body in setup() so top-level code compiles.
+        // This matches Processing Java's behaviour for static sketches.
+        f << "void setup() {\n";
+        for (auto& l : code) f << "    " << sanitizeLine(l) << "\n";
+        f << "}\n";
+        // Provide an empty draw() so the program links
+        f << "void draw() {}\n";
+    } else {
+        // Structured sketch -- paste as-is (already has setup/draw defined)
+        for (auto& l : code) f << sanitizeLine(l) << "\n";
+    }
+
+    f << "} // namespace Processing\n";
     return true;
 }
 
@@ -1309,6 +1425,266 @@ static void drawEditor() {
 // CONSOLE DRAW
 // =============================================================================
 
+// =============================================================================
+// VIM TAB  --  Binds editor + full help cheat sheet
+// =============================================================================
+
+// The complete list of every supported vim operation with a description
+static const char* VIM_HELP[] = {
+    "=== CURSOR MOVEMENT ===",
+    "h / Left       Move cursor left",
+    "l / Right      Move cursor right",
+    "k / Up         Move cursor up",
+    "j / Down       Move cursor down",
+    "w              Jump to start of next word",
+    "W              Jump to start of next WORD (whitespace-delimited)",
+    "b              Jump to start of previous word",
+    "B              Jump to start of previous WORD",
+    "e              Jump to end of word",
+    "E              Jump to end of WORD",
+    "0              Jump to start of line",
+    "$              Jump to end of line",
+    "^              Jump to first non-blank character",
+    "g_             Jump to last non-blank character",
+    "gg             Jump to first line",
+    "G              Jump to last line",
+    "<n>G           Jump to line n  (e.g. 42G)",
+    "<n>gg          Jump to line n  (e.g. 42gg)",
+    "Ctrl+d         Scroll half page down",
+    "Ctrl+u         Scroll half page up",
+    "Ctrl+f         Scroll full page down",
+    "Ctrl+b         Scroll full page up",
+    "H              Move to top of screen",
+    "M              Move to middle of screen",
+    "L              Move to bottom of screen",
+    "zz             Centre screen on cursor",
+    "%              Jump to matching bracket/paren",
+    "",
+    "=== INSERT MODE ===",
+    "i              Insert before cursor",
+    "I              Insert at start of line",
+    "a              Append after cursor",
+    "A              Append at end of line",
+    "o              Open new line below",
+    "O              Open new line above",
+    "s              Delete char and enter insert",
+    "S / cc         Delete line and enter insert",
+    "C              Delete to EOL and enter insert",
+    "r<c>           Replace single character with c",
+    "R              Enter replace mode (overtype)",
+    "Esc            Return to Normal mode",
+    "",
+    "=== EDITING ===",
+    "x              Delete char under cursor",
+    "X              Delete char before cursor",
+    "dd             Delete (cut) current line",
+    "<n>dd          Delete n lines",
+    "D              Delete to end of line",
+    "dw             Delete word",
+    "de             Delete to end of word",
+    "d0             Delete to start of line",
+    "d$             Delete to end of line",
+    "yy / Y         Yank (copy) current line",
+    "<n>yy          Yank n lines",
+    "yw             Yank word",
+    "y$             Yank to end of line",
+    "p              Paste after cursor / below line",
+    "P              Paste before cursor / above line",
+    "u              Undo",
+    "Ctrl+r         Redo",
+    ".              Repeat last change (not yet implemented)",
+    "~              Toggle case of char under cursor",
+    "g~~            Toggle case of entire line",
+    "J              Join line below onto current line",
+    ">>             Indent line",
+    "<<             De-indent line",
+    "<n>>>          Indent n lines",
+    "==             Auto-indent line",
+    "",
+    "=== VISUAL MODE ===",
+    "v              Start character visual mode",
+    "V              Start line visual mode",
+    "Ctrl+v         Start block visual mode (not yet implemented)",
+    "o              Go to other end of selection",
+    "Esc            Cancel selection",
+    "d / x          Delete selection",
+    "y              Yank selection",
+    "c              Change selection (delete + insert)",
+    ">              Indent selection",
+    "<              De-indent selection",
+    "~              Toggle case of selection",
+    "U              Uppercase selection",
+    "u              Lowercase selection",
+    "",
+    "=== CUT / COPY / PASTE ===",
+    "yy             Yank line to clipboard",
+    "dd             Cut line to clipboard",
+    "p / P          Paste from clipboard",
+    "Ctrl+c         Copy selection to system clipboard",
+    "Ctrl+x         Cut selection to system clipboard",
+    "Ctrl+v         Paste from system clipboard",
+    "",
+    "=== UNDO / REDO ===",
+    "u              Undo last change",
+    "U              Undo all changes on current line",
+    "Ctrl+r         Redo",
+    "",
+    "=== SEARCH (partial) ===",
+    "/ <pattern>    Not yet implemented",
+    "n / N          Not yet implemented",
+    "* / #          Not yet implemented",
+    "",
+    "=== MARKS (not yet implemented) ===",
+    "m<a>           Set mark a",
+    "`<a>           Jump to mark a",
+    "''             Jump to previous position",
+    "",
+    "=== MACROS (not yet implemented) ===",
+    "q<a>           Record macro into register a",
+    "q              Stop recording",
+    "@<a>           Play macro a",
+    "@@             Replay last macro",
+    "",
+    "=== IDE SHORTCUTS (Normal + Insert) ===",
+    "Ctrl+s         Save file",
+    "Ctrl+Shift+s   Save as...",
+    "Ctrl+o         Open file",
+    "Ctrl+n         New sketch",
+    "Ctrl+b         Build sketch",
+    "Ctrl+r         Build and run",
+    "Ctrl+.         Stop running sketch",
+    "Ctrl+/         Toggle line comment",
+    "Ctrl+Shift+f   Auto-format (re-indent)",
+    "Ctrl+d         Duplicate line",
+    "Ctrl+a         Select all",
+    "Ctrl+=         Increase font size",
+    "Ctrl+-         Decrease font size",
+    "Ctrl+Shift+v   Toggle vim mode",
+    "Ctrl+Shift+m   Open serial monitor",
+    "Ctrl+Shift+l   Open library manager",
+    "",
+    "=== EX COMMANDS (not yet implemented) ===",
+    ":w             Write (save)",
+    ":q             Quit",
+    ":wq            Write and quit",
+    ":q!            Force quit without saving",
+    ":<n>           Jump to line n",
+    ":s/foo/bar/g   Substitute (not yet implemented)",
+    nullptr
+};
+
+static void drawVimTab() {
+    int   cy  = consoleY(), cx = consoleX(), cw = consoleW();
+    int   consH = (terminalPos == TermPos::Right) ? height - editorY() : CONSOLE_H;
+
+    qFill(cx+4, cy+4, cw-4, consH-4, 18, 18, 24);
+
+    // Sub-panel selector tabs: [Binds] [Help]
+    float bx = (float)(cx + 8);
+    float by = (float)(cy + 4 + TAB_H + 4);
+
+    // "Binds" sub-tab
+    bool bindsActive = (vimPanel == VimPanel::Binds);
+    bool bindsHov    = mouseX>=bx && mouseX<=bx+58 && mouseY>=by && mouseY<=by+18;
+    qFill(bx, by, 58, 18, bindsActive?32:bindsHov?28:22, bindsActive?34:bindsHov?30:23, bindsActive?55:bindsHov?46:34);
+    if (bindsActive) qLine(bx, by+17, bx+58, by+17, 17, 108, 179);
+    iText("Binds", bx+8, by+14, bindsActive?230:150, bindsActive?235:155, bindsActive?255:185, FST);
+
+    // "Help" sub-tab
+    float hx = bx + 64;
+    bool helpActive = (vimPanel == VimPanel::Help);
+    bool helpHov    = mouseX>=hx && mouseX<=hx+52 && mouseY>=by && mouseY<=by+18;
+    qFill(hx, by, 52, 18, helpActive?32:helpHov?28:22, helpActive?34:helpHov?30:23, helpActive?55:helpHov?46:34);
+    if (helpActive) qLine(hx, by+17, hx+52, by+17, 17, 108, 179);
+    iText("Help", hx+8, by+14, helpActive?230:150, helpActive?235:155, helpActive?255:185, FST);
+
+    float contentTop = by + 24;
+    float lh         = FST * 1.6f;
+    int   contentH   = consH - 4 - TAB_H - 28;
+    int   visRows    = std::max(1, (int)(contentH / lh));
+
+    if (vimPanel == VimPanel::Binds) {
+        // -- Binds editor -- a simple scrollable text buffer --------------
+        // Header
+        iText("Key Bindings (read only -- edit in src/vim_binds.txt)",
+              cx+8, contentTop + lh - 3, 100, 120, 170, FST);
+        contentTop += lh + 4;
+        visRows = std::max(1, (int)((consH - 4 - TAB_H - 28 - lh - 4) / lh));
+
+        vimBindsScroll = std::max(0, std::min(vimBindsScroll,
+                         std::max(0, (int)vimBindsCode.size() - visRows)));
+
+        for (int i = 0; i < visRows; i++) {
+            int li = vimBindsScroll + i;
+            if (li >= (int)vimBindsCode.size()) break;
+            auto& line = vimBindsCode[li];
+            float ry = contentTop + i * lh;
+            bool isComment = !line.empty() && line[0] == '/';
+            bool isEmpty   = line.empty();
+            int r = isEmpty ? 0 : (isComment ? 106 : 188);
+            int g = isEmpty ? 0 : (isComment ? 153 : 192);
+            int b = isEmpty ? 0 : (isComment ?  85 : 220);
+            iText(line, cx+14, ry + lh - 3, r, g, b, FST);
+        }
+        // Scrollbar
+        if ((int)vimBindsCode.size() > visRows) {
+            float th  = contentH - lh - 4;
+            float sbH = std::max(6.f, (float)visRows / vimBindsCode.size() * th);
+            float sbY = contentTop + (float)vimBindsScroll / vimBindsCode.size() * th;
+            qFill(cx+cw-6, contentTop, 6, th, 38, 38, 38);
+            qFill(cx+cw-6, sbY, 6, sbH, 80, 80, 80);
+        }
+
+    } else {
+        // -- Help: full cheat sheet -----------------------------------------
+        // Count entries
+        int total = 0;
+        while (VIM_HELP[total]) total++;
+
+        vimHelpScroll = std::max(0, std::min(vimHelpScroll,
+                        std::max(0, total - visRows)));
+
+        for (int i = 0; i < visRows; i++) {
+            int li = vimHelpScroll + i;
+            if (li >= total || !VIM_HELP[li]) break;
+            std::string line = VIM_HELP[li];
+            float ry = contentTop + i * lh;
+            // Section headers are "=== ... ==="
+            bool isHeader  = line.size()>3 && line[0]=='=' && line[1]=='=';
+            bool isEmpty   = line.empty();
+            bool isComment = !line.empty() && line[0]=='/';
+            int r, g, b;
+            if      (isHeader)  { r=17;  g=158; b=255; }  // bright blue header
+            else if (isEmpty)   { r=0;   g=0;   b=0;   }
+            else if (isComment) { r=106; g=153; b=85;  }
+            else {
+                // Key part in yellow, description in grey
+                size_t sp = line.find("   ");
+                if (sp != std::string::npos) {
+                    std::string key  = line.substr(0, sp);
+                    std::string desc = line.substr(sp);
+                    textSize(FST);
+                    float kw = textWidth(key);
+                    iText(key,  cx+14,      ry+lh-3, 220, 210, 100, FST);
+                    iText(desc, cx+14+kw,   ry+lh-3, 140, 148, 170, FST);
+                    continue;
+                }
+                r=188; g=192; b=200;
+            }
+            iText(line, cx+14, ry+lh-3, r, g, b, FST);
+        }
+
+        // Scrollbar
+        if (total > visRows) {
+            float th  = (float)contentH;
+            float sbH = std::max(6.f, (float)visRows / total * th);
+            float sbY = contentTop + (float)vimHelpScroll / total * th;
+            qFill(cx+cw-6, contentTop, 6, th, 38, 38, 38);
+            qFill(cx+cw-6, sbY, 6, sbH, 80, 80, 80);
+        }
+    }
+}
+
 static void drawConsole() {
     // Snapshot output lines to avoid holding lock during render
     std::vector<std::string> snap;
@@ -1362,6 +1738,17 @@ static void drawConsole() {
     fill(ntH?200:120, ntH?210:130, ntH?255:180);
     text("+", tx+5, cy+4+TAB_H-6);
 
+    // Vim special tab (right-aligned)
+    textSize(FST);
+    float vtw = textWidth("Vim") + 20;
+    float vtx = cx + cw - vtw - 8;
+    bool  vtA = showVimTab;
+    bool  vtH = mouseX>=vtx && mouseX<=vtx+vtw && mouseY>=cy+4 && mouseY<=cy+4+TAB_H;
+    qFill(vtx, cy+4, vtw, TAB_H, vtA?36:vtH?30:24, vtA?28:vtH?24:20, vtA?58:vtH?46:36);
+    if (vtA) qLine(vtx, cy+4+TAB_H-1, vtx+vtw, cy+4+TAB_H-1, 150, 100, 255);
+    fill(vtA?200:vtH?180:120, vtA?160:vtH?140:100, vtA?255:vtH?240:180);
+    text("Vim", vtx+6, cy+4+TAB_H-6);
+
     // Running indicator
     if (sketchRunning)
         iText("* RUNNING", (float)(cx+cw-200), cy+4+TAB_H*0.75f, 80, 210, 100, FST);
@@ -1375,20 +1762,28 @@ static void drawConsole() {
         iText("Stop", sx+14, sy2+sh*0.82f, 255, 180, 180, 10.0f);
     }
 
-    // Copy All button -- drawn BELOW the tab bar so its Y range doesn't
-    // overlap the tab-bar click area (cy+4 .. cy+4+TAB_H).
-    // Uses a fixed dark-blue background so it's always visible.
-    float cbx = cx+cw-84;
-    float cby = cy + 4 + TAB_H + 2;  // just below tab bar
-    float cbw = 76;
-    float cbh = 14;
-    bool  cbH = mouseX>=cbx && mouseX<=cbx+cbw && mouseY>=cby && mouseY<=cby+cbh;
-    // Background: always dark blue (visible even without hover)
-    qFill(cbx, cby, cbw, cbh, 22, 28, 55);
-    // Border: brighter blue on hover, dim otherwise
-    qBorder(cbx, cby, cbw, cbh, cbH?80:45, cbH?130:65, cbH?220:120);
-    // Text: always white-ish, brighter on hover
-    iText("Copy All", cbx+6, cby+cbh*0.85f, cbH?240:190, cbH?245:198, cbH?255:220, 10.0f);
+    // Copy All button: placed in the tab bar at the right, before the Vim tab.
+    // Same Y as tabs so it feels like part of the bar, not floating below.
+    // Fixed opaque background so it never disappears on hover.
+    {
+        textSize(FST);
+        float vtw = textWidth("Vim") + 20;
+        float cbw = 68;
+        float cbx = cx + cw - vtw - 8 - cbw - 4;  // left of Vim tab
+        float cby2 = cy + 5;
+        float cbh = TAB_H - 2;
+        bool  cbH = mouseX>=cbx && mouseX<=cbx+cbw && mouseY>=cby2 && mouseY<=cby2+cbh;
+        qFill(cbx, cby2, cbw, cbh, 22, 34, 62);
+        qBorder(cbx, cby2, cbw, cbh, cbH?100:50, cbH?160:80, cbH?255:140);
+        iText("Copy All", cbx+5, cby2+cbh*0.76f,
+              cbH?255:200, cbH?255:210, cbH?255:240, FST);
+    }
+
+    // When Vim tab is active, hand off to the Vim panel renderer
+    if (showVimTab) {
+        drawVimTab();
+        return;
+    }
 
     // Output lines
     auto& tlines  = terminals[activeTab].lines;
@@ -1659,12 +2054,15 @@ void setup() {
     size(1080, 740);
     windowResizable(true);
     frameRate(60);
-    windowTitle("ProcessingGL");
+    windowTitle("ProcessingGL IDE");
 
-    // Load window icon if present (icon.png or icon.jpg next to the exe)
-    // stb_image is used to load the file; GLFW accepts RGBA arrays.
+    // Load window icon -- prefer logo.jpg (the ProcessingGL logo),
+    // then fall back to other common filenames.
+    // stb_image loads the file; GLFW SetWindowIcon takes RGBA pixel data.
     {
-        static const char* ICON_PATHS[] = { "icon.png","icon.jpg","icon.bmp",nullptr };
+        static const char* ICON_PATHS[] = {
+            "files/logo.jpg","files/logo.png",
+            "logo.jpg","logo.png","icon.png","icon.jpg",nullptr };
         for (int i=0; ICON_PATHS[i]; i++) {
             if (plat_file_exists(ICON_PATHS[i])) {
                 PImage* img = loadImage(ICON_PATHS[i]);
@@ -1694,6 +2092,17 @@ void setup() {
     // Tree is populated when user clicks "Open" -- not on startup
     outLines.push_back("ProcessingGL ready.");
     outLines.push_back("Ctrl+B build | Ctrl+R run | Ctrl+. stop | Ctrl+Shift+M serial | Ctrl+Shift+L libs");
+
+    // Load vim binds file from files/ directory
+    {
+        std::ifstream vbf("files/vim_binds.txt");
+        if (vbf.good()) {
+            vimBindsCode.clear();
+            std::string vline;
+            while (std::getline(vbf, vline)) vimBindsCode.push_back(vline);
+            outLines.push_back("Loaded files/vim_binds.txt");
+        }
+    }
 }
 
 // Draw an animated build progress bar overlaid at the bottom of the editor.
@@ -1976,18 +2385,30 @@ void mousePressed() {
 
         // Tab bar clicks
         if (mouseY>=cy+4&&mouseY<=cy+4+TAB_H) {
+            // Check Vim special tab first (right-aligned)
+            textSize(FST);
+            float vtw2 = textWidth("Vim") + 20;
+            float vtx2 = consoleX() + consoleW() - vtw2 - 8;
+            if (mouseX>=vtx2&&mouseX<=vtx2+vtw2) {
+                showVimTab = !showVimTab;
+                return;
+            }
+
             float tx=(float)(consoleX()+8);
             for (int i=0;i<(int)terminals.size();i++) {
                 textSize(FST); float tw=textWidth(terminals[i].name)+20;
-                if (mouseX>=tx&&mouseX<=tx+tw) { activeTab=i; consoleSelLine=-1; return; }
+                if (mouseX>=tx&&mouseX<=tx+tw) { activeTab=i; consoleSelLine=-1; showVimTab=false; return; }
                 tx+=tw+2;
             }
-            if (mouseX>=tx&&mouseX<=tx+20) { terminals.push_back({"Tab "+std::to_string(terminals.size()+1),{},0,false}); activeTab=(int)terminals.size()-1; return; }
+            if (mouseX>=tx&&mouseX<=tx+20) { terminals.push_back({"Tab "+std::to_string(terminals.size()+1),{},0,false}); activeTab=(int)terminals.size()-1; showVimTab=false; return; }
             return;
         }
 
-        // Copy All -- copies every line from every tab
-        float cbx=(float)(consoleX()+consoleW()-84), cby2=(float)(cy+4+TAB_H+2), cbw2=76, cbh=14;
+        // Copy All -- in the tab bar at the right (before Vim tab)
+        textSize(FST);
+        float _vtw = textWidth("Vim") + 20;
+        float cbw2=68, cbx=(float)(consoleX()+consoleW()-_vtw-8-cbw2-4);
+        float cby2=(float)(consoleY()+5), cbh=(float)(TAB_H-2);
         if (mouseX>=cbx&&mouseX<=cbx+cbw2&&mouseY>=cby2&&mouseY<=cby2+cbh) {
             std::string all;
             { std::lock_guard<std::mutex> lk(outMutex);
@@ -2001,8 +2422,16 @@ void mousePressed() {
             return;
         }
 
+        // Vim sub-panel tab clicks (Binds / Help)
+        if (showVimTab && mouseY >= cy+4+TAB_H+4 && mouseY <= cy+4+TAB_H+22) {
+            float bx2 = (float)(consoleX() + 8);
+            float by2 = (float)(cy + 4 + TAB_H + 4);
+            if (mouseX>=bx2&&mouseX<=bx2+58) { vimPanel=VimPanel::Binds; return; }
+            if (mouseX>=bx2+64&&mouseX<=bx2+116) { vimPanel=VimPanel::Help; return; }
+        }
+
         // Line click -- copy line to clipboard
-        if (mouseY>=cy+4+TAB_H&&mouseY<height) {
+        if (!showVimTab && mouseY>=cy+4+TAB_H&&mouseY<height) {
             float lh2=FSS*1.5f;
             int vi=(int)((mouseY-(cy+4+TAB_H))/lh2);
             auto& tlines=terminals[activeTab].lines;
@@ -2094,9 +2523,21 @@ void mouseWheel(int delta) {
         scrollTop=std::max(0,std::min(scrollTop+delta*3,std::max(0,(int)code.size()-visLines()))); return;
     }
     if (mouseY>=consoleY()) {
-        float lh2=FSS*1.5f; int vis=std::max(1,(int)((CONSOLE_H-4-TAB_H)/lh2));
-        auto& ts=terminals[activeTab].scroll; auto& tl=terminals[activeTab].lines;
-        ts=std::max(0,std::min(ts+delta*2,std::max(0,(int)tl.size()-vis)));
+        if (showVimTab) {
+            if (vimPanel == VimPanel::Binds) {
+                vimBindsScroll = std::max(0, vimBindsScroll + delta * 2);
+            } else {
+                int total = 0;
+                while (VIM_HELP[total]) total++;
+                float lh2b = FST * 1.6f;
+                int vis2 = std::max(1,(int)((CONSOLE_H-4-TAB_H-28)/lh2b));
+                vimHelpScroll = std::max(0,std::min(vimHelpScroll+delta*2,std::max(0,total-vis2)));
+            }
+        } else {
+            float lh2=FSS*1.5f; int vis=std::max(1,(int)((CONSOLE_H-4-TAB_H)/lh2));
+            auto& ts=terminals[activeTab].scroll; auto& tl=terminals[activeTab].lines;
+            ts=std::max(0,std::min(ts+delta*2,std::max(0,(int)tl.size()-vis)));
+        }
     }
 }
 

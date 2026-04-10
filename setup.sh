@@ -30,7 +30,7 @@ elif command -v pacman  &>/dev/null; then PLAT=arch;     info "Linux -- Arch (pa
 elif command -v apt-get &>/dev/null; then PLAT=debian;   info "Linux -- Debian/Ubuntu (apt)"
 elif command -v dnf     &>/dev/null; then PLAT=fedora;   info "Linux -- Fedora (dnf)"
 elif command -v zypper  &>/dev/null; then PLAT=opensuse; info "Linux -- openSUSE (zypper)"
-else die "Unknown distro. Install g++, libglfw, libGLEW, libGL manually then run: bash buildSimplepp.sh"; fi
+else die "Unknown distro. Install g++, libglfw, libGLEW, libGL manually then run: bash buildIde.sh"; fi
 
 # --- Install system packages -----------------------------------------------
 step "Installing dependencies"
@@ -108,6 +108,73 @@ else
     ok "default.ttf already present"
 fi
 
+# --- Create project folder structure ----------------------------------------
+step "Setting up project folders"
+mkdir -p files lib
+
+# Place logo.jpg in files/ if it exists at root
+if [ -f "logo.jpg" ] && [ ! -f "files/logo.jpg" ]; then
+    cp logo.jpg files/logo.jpg && ok "logo.jpg -> files/logo.jpg"
+elif [ -f "files/logo.jpg" ]; then
+    ok "files/logo.jpg already present"
+fi
+
+# Create vim_binds.txt in files/ if missing
+if [ ! -f "files/vim_binds.txt" ]; then
+    cat > files/vim_binds.txt << 'VIMBINDS'
+// ProcessingGL Vim Key Bindings
+// Edit this file to add your own notes and reminders.
+// Changes are loaded automatically when the IDE starts.
+
+// --- Normal mode motions ---
+h / l         left / right
+j / k         down / up
+w / b         next / previous word
+0 / $         start / end of line
+^             first non-blank character
+gg / G        first / last line
+Ctrl+d/u      half page down / up
+
+// --- Insert mode ---
+i / a         insert before / after cursor
+I / A         insert at start / end of line
+o / O         open line below / above
+Esc           return to Normal
+
+// --- Editing ---
+x / X         delete char under / before cursor
+dd            delete line
+yy / Y        yank line
+p / P         paste below / above
+u             undo
+Ctrl+r        redo
+>> / <<       indent / de-indent
+r<c>          replace character
+
+// --- Visual mode ---
+v / V         character / line visual
+d / y / c     delete / yank / change selection
+
+// --- IDE shortcuts ---
+Ctrl+b        build
+Ctrl+r        run
+Ctrl+s        save
+Ctrl+o        open
+Ctrl+Shift+v  toggle vim mode
+VIMBINDS
+    ok "files/vim_binds.txt created"
+else
+    ok "files/vim_binds.txt already present"
+fi
+
+# Copy sample sketches into files/ if they exist at root
+for SAMPLE in Geometry.cpp Mixture.cpp Mandelbrot.cpp StoringInput.cpp; do
+    if [ -f "$SAMPLE" ] && [ ! -f "files/$SAMPLE" ]; then
+        cp "$SAMPLE" "files/$SAMPLE" && ok "Sample: $SAMPLE -> files/"
+    fi
+done
+ok "Project folders ready (files/ lib/)"
+
 # --- src/main.cpp ----------------------------------------------------------
 if [ ! -f src/main.cpp ]; then
     cat > src/main.cpp << 'MAINCPP'
@@ -135,7 +202,7 @@ else
     LD="-lglfw -lGLEW -lGL -lGLU -lm -pthread"
 fi
 
-cat > buildSimplepp.sh << BIDE
+cat > buildIde.sh << BIDE
 #!/usr/bin/env bash
 set -e
 echo "[build] Compiling IDE..."
@@ -143,11 +210,11 @@ g++ -std=c++17 \\
     src/Processing.cpp \\
     src/IDE.cpp \\
     src/main.cpp \\
-    -o processinggl \\
+    -o ProcessingGL \\
     $LD
-echo "[build] Done: ./processinggl"
+echo "[build] Done: ./ProcessingGL"
 BIDE
-chmod +x buildSimplepp.sh; ok "buildSimplepp.sh"
+chmod +x buildIde.sh; ok "buildIde.sh"
 
 cat > build.sh << BUILD
 #!/usr/bin/env bash
@@ -184,7 +251,7 @@ done
 
 # --- Build IDE -------------------------------------------------------------
 step "Building IDE"
-bash buildSimplepp.sh
+bash buildIde.sh
 
 # --- Optional AppImage (Arch only) -----------------------------------------
 if [[ $PLAT == arch ]]; then
@@ -242,4 +309,4 @@ echo -e "  ${C}Ctrl+Shift+M${N}  serial monitor"
 echo -e "  ${C}Ctrl+Shift+L${N}  library manager"
 echo -e "  ${C}Ctrl+Shift+V${N}  vim mode"
 echo ""
-exec ./processinggl
+exec ./ProcessingGL

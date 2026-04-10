@@ -2,7 +2,7 @@
 setlocal EnableDelayedExpansion
 :: =============================================================================
 :: ProcessingGL -- Windows Setup
-:: Double-click this file. It installs MSYS2 if needed, then builds processinggl.exe.
+:: Double-click this file. It installs MSYS2 if needed, then builds ProcessingGL.exe.
 :: =============================================================================
 
 echo.
@@ -86,12 +86,33 @@ echo.
 echo [INFO] Downloading stb headers...
 if not exist "src" mkdir src
 
+:: Try multiple download methods: MSYS2 curl, system curl, then PowerShell
 if not exist "src\stb_truetype.h" (
-    "!BASH!" -lc "curl -sL https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h -o src/stb_truetype.h && echo [OK]  stb_truetype.h || echo [WARN] stb_truetype.h download failed"
+    echo [INFO] Downloading stb_truetype.h...
+    "!BASH!" -lc "curl -fsSL https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h -o src/stb_truetype.h 2>/dev/null" 2>nul
+    if not exist "src\stb_truetype.h" (
+        curl -fsSL "https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h" -o "src\stb_truetype.h" 2>nul
+    )
+    if not exist "src\stb_truetype.h" (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+            "[Net.ServicePointManager]::SecurityProtocol='Tls12,Tls13';" ^
+            "Invoke-WebRequest 'https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h' -OutFile 'src\stb_truetype.h'" 2>nul
+    )
+    if exist "src\stb_truetype.h" ( echo [OK]  stb_truetype.h ) else ( echo [WARN] stb_truetype.h download failed -- add it to src\ manually )
 ) else ( echo [OK]  stb_truetype.h already present )
 
 if not exist "src\stb_image.h" (
-    "!BASH!" -lc "curl -sL https://raw.githubusercontent.com/nothings/stb/master/stb_image.h -o src/stb_image.h && echo [OK]  stb_image.h || echo [WARN] stb_image.h download failed"
+    echo [INFO] Downloading stb_image.h...
+    "!BASH!" -lc "curl -fsSL https://raw.githubusercontent.com/nothings/stb/master/stb_image.h -o src/stb_image.h 2>/dev/null" 2>nul
+    if not exist "src\stb_image.h" (
+        curl -fsSL "https://raw.githubusercontent.com/nothings/stb/master/stb_image.h" -o "src\stb_image.h" 2>nul
+    )
+    if not exist "src\stb_image.h" (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+            "[Net.ServicePointManager]::SecurityProtocol='Tls12,Tls13';" ^
+            "Invoke-WebRequest 'https://raw.githubusercontent.com/nothings/stb/master/stb_image.h' -OutFile 'src\stb_image.h'" 2>nul
+    )
+    if exist "src\stb_image.h" ( echo [OK]  stb_image.h ) else ( echo [WARN] stb_image.h download failed -- add it to src\ manually )
 ) else ( echo [OK]  stb_image.h already present )
 
 :: ---------------------------------------------------------------------------
@@ -134,25 +155,124 @@ if not exist "src\main.cpp" (
 ) else ( echo [OK]  src\main.cpp already present )
 
 :: ---------------------------------------------------------------------------
-:: 6. Check required source files
+:: 6. Copy / download source files into src\
 :: ---------------------------------------------------------------------------
 echo.
-echo [INFO] Checking source files...
+echo [INFO] Checking and copying source files...
+if not exist "src" mkdir src
+
+:: First: copy any source files found next to setup.bat into src\
+for %%F in (Processing.h Processing.cpp Platform.h IDE.cpp Processing_defaults.cpp) do (
+    if not exist "src\%%F" if exist "%%F" (
+        copy "%%F" "src\%%F" >nul
+        echo [OK]  Copied %%F into src\
+    )
+)
+
+:: Check which required files are still missing
 set MISSING=0
 for %%F in (src\Processing.h src\Processing.cpp src\Platform.h src\IDE.cpp) do (
-    if not exist "%%F" (
-        echo [WARN] Missing: %%F
-        set /a MISSING+=1
-    ) else ( echo [OK]  Found: %%F )
+    if not exist "%%F" set /a MISSING+=1
 )
+
+:: If files are missing, print a clear error explaining what to do
 if !MISSING! GTR 0 (
     echo.
-    echo [ERR] Copy missing files into src\ then double-click setup.bat again.
+    echo [ERR] Source files are missing from the src\ folder.
+    echo.
+    echo   Required files:
+    for %%F in (src\Processing.h src\Processing.cpp src\Platform.h src\IDE.cpp src\Processing_defaults.cpp) do (
+        if not exist "%%F" ( echo     MISSING: %%F ) else ( echo     OK:      %%F )
+    )
+    echo.
+    echo   How to fix:
+    echo     1. Place Processing.h, Processing.cpp, Platform.h, IDE.cpp
+    echo        and Processing_defaults.cpp next to setup.bat
+    echo     2. Double-click setup.bat again
+    echo.
     pause & exit /b 1
 )
 
+:: All files present -- confirm
+for %%F in (src\Processing.h src\Processing.cpp src\Platform.h src\IDE.cpp src\Processing_defaults.cpp) do (
+    echo [OK]  Found: %%F
+)
+
 :: ---------------------------------------------------------------------------
-:: 7. Write build scripts
+:: 7. Create project folder structure (files\ and lib\)
+:: ---------------------------------------------------------------------------
+echo.
+echo [INFO] Setting up project folders...
+if not exist "files" mkdir files
+if not exist "lib"   mkdir lib
+
+:: Move logo.jpg into files\ if it is in the root
+if exist "logo.jpg" if not exist "files\logo.jpg" (
+    copy "logo.jpg" "files\logo.jpg" >nul
+    echo [OK]  logo.jpg -^> files\logo.jpg
+)
+if exist "files\logo.jpg" ( echo [OK]  files\logo.jpg present )
+
+:: Copy sample sketches into files\ if they exist next to setup.bat
+for %%S in (Geometry.cpp Mixture.cpp Mandelbrot.cpp StoringInput.cpp) do (
+    if exist "%%S" if not exist "files\%%S" (
+        copy "%%S" "files\%%S" >nul
+        echo [OK]  Sample: %%S -^> files\
+    )
+)
+
+:: Create vim_binds.txt in files\ if it doesn't exist yet
+if not exist "files\vim_binds.txt" (
+    (
+        echo // ProcessingGL Vim Key Bindings
+        echo // Edit this file to add your own notes and reminders.
+        echo // Saved here: files\vim_binds.txt
+        echo // The IDE loads this file automatically on startup.
+        echo.
+        echo // --- Normal mode motions ---
+        echo h / l         left / right
+        echo j / k         down / up
+        echo w / b         next / previous word
+        echo 0 / $         start / end of line
+        echo ^             first non-blank character
+        echo gg / G        first / last line
+        echo Ctrl+d/u      half page down / up
+        echo.
+        echo // --- Insert mode ---
+        echo i / a         insert before / after cursor
+        echo I / A         insert at start / end of line
+        echo o / O         open line below / above
+        echo Esc           return to Normal mode
+        echo.
+        echo // --- Editing ---
+        echo x / X         delete char under / before cursor
+        echo dd            delete line
+        echo yy / Y        yank line
+        echo p / P         paste below / above
+        echo u / Ctrl+r    undo / redo
+        echo ^>^> / ^<^<      indent / de-indent
+        echo r^<c^>          replace character under cursor
+        echo.
+        echo // --- Visual mode ---
+        echo v / V         character / line visual
+        echo d / y / c     delete / yank / change selection
+        echo.
+        echo // --- IDE shortcuts ---
+        echo Ctrl+b        build
+        echo Ctrl+r        build and run
+        echo Ctrl+s        save
+        echo Ctrl+o        open file
+        echo Ctrl+Shift+v  toggle vim mode
+        echo Ctrl+Shift+m  serial monitor
+        echo Ctrl+Shift+l  library manager
+    ) > "files\vim_binds.txt"
+    echo [OK]  files\vim_binds.txt created
+) else ( echo [OK]  files\vim_binds.txt already present )
+
+echo [OK]  Project folders ready ^(files\ lib\^)
+
+:: ---------------------------------------------------------------------------
+:: 11. Write build scripts
 :: ---------------------------------------------------------------------------
 echo.
 echo [INFO] Writing build scripts...
@@ -165,14 +285,14 @@ echo [INFO] Writing build scripts...
         src\IDE.cpp ^
         src\Processing_defaults.cpp ^
         src\main.cpp ^
-        -o processinggl.exe ^
+        -o ProcessingGL.exe ^
         -lglfw3 -lglew32 -lopengl32 -lglu32 ^
         -lcomdlg32 -lshell32 -lole32 -luuid ^
         -pthread -O2 ^
         -D_USE_MATH_DEFINES ^
         -mwindows
     echo if %%ERRORLEVEL%% neq 0 ^( echo [ERR] Build failed. ^& pause ^& exit /b 1 ^)
-    echo echo [build] Done: processinggl.exe
+    echo echo [build] Done: ProcessingGL.exe
 ) > buildSimplepp.bat
 echo [OK]  buildSimplepp.bat
 
@@ -200,7 +320,7 @@ echo [OK]  build.bat
 :: Windows: .bat files only (no .sh generated here)
 
 :: ---------------------------------------------------------------------------
-:: 8. Build the IDE
+:: 11. Build the IDE
 :: ---------------------------------------------------------------------------
 echo.
 echo [INFO] Building IDE...
@@ -209,7 +329,7 @@ echo [INFO] Building IDE...
     src\IDE.cpp ^
     src\Processing_defaults.cpp ^
     src\main.cpp ^
-    -o processinggl.exe ^
+    -o ProcessingGL.exe ^
     -lglfw3 -lglew32 -lopengl32 -lglu32 ^
     -lcomdlg32 -lshell32 -lole32 -luuid ^
     -mwindows -pthread -O2 ^
@@ -220,10 +340,10 @@ if %ERRORLEVEL% neq 0 (
     echo [ERR] Build failed -- see errors above.
     pause & exit /b 1
 )
-echo [OK]  processinggl.exe built
+echo [OK]  ProcessingGL.exe built
 
 :: ---------------------------------------------------------------------------
-:: 9. Collect DLLs
+:: 11. Collect DLLs
 :: ---------------------------------------------------------------------------
 echo.
 echo [INFO] Collecting runtime DLLs...
@@ -243,21 +363,21 @@ for %%D in (
 )
 
 :: Auto-collect any additional DLLs the binary links against (via bash/objdump)
-"!BASH!" -lc "cd '$(cygpath -u "%CD%")' && objdump -p processinggl.exe 2>/dev/null | grep 'DLL Name' | awk '{print $3}' | while read dll; do [ -f /mingw64/bin/$dll ] && [ ! -f ./$dll ] && cp /mingw64/bin/$dll . && echo "[OK]  $dll (auto)"; done"
+"!BASH!" -lc "cd '$(cygpath -u "%CD%")' && objdump -p ProcessingGL.exe 2>/dev/null | grep 'DLL Name' | awk '{print $3}' | while read dll; do [ -f /mingw64/bin/$dll ] && [ ! -f ./$dll ] && cp /mingw64/bin/$dll . && echo "[OK]  $dll (auto)"; done"
 
 :: ---------------------------------------------------------------------------
-:: 10. Done
+:: 11. Done
 :: ---------------------------------------------------------------------------
 echo.
 echo  +============================================+
 echo  ^|   Setup complete!                         ^|
 echo  +============================================+
 echo.
-echo   Run IDE:       double-click processinggl.exe
+echo   Run IDE:       double-click ProcessingGL.exe
 echo   Build sketch:  build.bat MySketch.cpp
 echo   Rebuild IDE:   buildSimplepp.bat
 echo.
 pause
 :: Launch IDE
-:: Run "processinggl.exe --debug" from a terminal to see error output
-start "ProcessingGL IDE" processinggl.exe
+:: Run "ProcessingGL.exe --debug" from a terminal to see error output
+start "ProcessingGL IDE" ProcessingGL.exe

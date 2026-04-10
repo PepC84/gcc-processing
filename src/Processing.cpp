@@ -8,6 +8,7 @@
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <array>
 #include <string>
 #include <functional>
 #include <memory>
@@ -20,7 +21,7 @@
 // #define STB_IMAGE_WRITE_IMPLEMENTATION
 // #include "stb_image_write.h"
 
-// stb_truetype — drop stb_truetype.h next to this file for TTF font rendering.
+// stb_truetype -- drop stb_truetype.h next to this file for TTF font rendering.
 // default.ttf in the project root is loaded automatically as the default font.
 #if __has_include("stb_truetype.h")
 #  define STB_TRUETYPE_IMPLEMENTATION
@@ -99,7 +100,8 @@ static int   lightIndex=0;
 static int  shapeKind=-1;
 static bool inShape=false,inContour=false;
 static bool shape3D=false;
-static std::vector<std::pair<float,float>> shapeVerts;
+static std::vector<std::pair<float,float>>          shapeVerts;   // 2D projections (for stroke outlines)
+static std::vector<std::array<float,3>>             shapeVerts3D; // full 3D positions (for fill)
 static std::vector<std::pair<float,float>> contourVerts;
 
 // Style stack
@@ -203,7 +205,7 @@ color::color(float r,float g,float b,float a){ value = makeColor(r,g,b,a).value;
 void colorMode(int mode,float mx){colorModeVal=mode;colorMaxH=colorMaxS=colorMaxB=colorMaxA=mx;}
 void colorMode(int mode,float mH,float mS,float mB,float mA){colorModeVal=mode;colorMaxH=mH;colorMaxS=mS;colorMaxB=mB;colorMaxA=mA;}
 
-// Color channel accessors — scaled to current colorMode range
+// Color channel accessors -- scaled to current colorMode range
 float red(color c)       {unsigned int v=c.value;return (v>>16&0xFF)/255.0f*colorMaxH;}
 float green(color c)     {unsigned int v=c.value;return (v>>8&0xFF)/255.0f*colorMaxS;}
 float blue(color c)      {unsigned int v=c.value;return (v&0xFF)/255.0f*colorMaxB;}
@@ -519,39 +521,27 @@ void sphere(float r){
 // =============================================================================
 
 void beginShape(int kind){
-    shapeKind=kind;inShape=true;shapeVerts.clear();
-    // Always collect verts — used for stroke outlines in all modes.
-    // For explicit kinds we also open a glBegin for immediate fill rendering.
-    shape3D=false;
-    if(kind!=-1){
-        GLenum gm;
-        switch(kind){
-            case POINTS:gm=GL_POINTS;break;case LINES:gm=GL_LINES;break;
-            case TRIANGLES:gm=GL_TRIANGLES;break;case TRIANGLE_FAN:gm=GL_TRIANGLE_FAN;break;
-            case TRIANGLE_STRIP:gm=GL_TRIANGLE_STRIP;break;case QUADS:gm=GL_QUADS;break;
-            case QUAD_STRIP:gm=GL_QUAD_STRIP;break;default:gm=GL_TRIANGLES;break;
-        }
-        shape3D=true;  // signals endShape to close the glBegin
-        if(doFill){
-            // Push fill back slightly so stroke lines drawn at same z are visible
-            glEnable(GL_POLYGON_OFFSET_FILL);
-            glPolygonOffset(1.0f, 1.0f);
-            applyFill();
-            glBegin(gm);
-        }
-    }
+    shapeKind = kind;
+    inShape   = true;
+    shape3D   = false;
+    shapeVerts.clear();
+    shapeVerts3D.clear();
+    // Vertices are always collected in shapeVerts / shapeVerts3D.
+    // endShape() draws fill and/or stroke from those collections.
+    // shape3D is set when 3-component vertices are used (vertex(x,y,z)).
 }
-void vertex(float x,float y){
-    if(inContour){contourVerts.push_back({x,y});return;}
-    if(!inShape)return;
-    shapeVerts.push_back({x,y});   // always collect
-    if(shape3D) glVertex3f(x,y,0); // also emit immediately for explicit kinds
+void vertex(float x, float y) {
+    if (inContour) { contourVerts.push_back({x,y}); return; }
+    if (!inShape)  return;
+    shapeVerts.push_back({x, y});
+    shapeVerts3D.push_back({x, y, 0.0f});
 }
-void vertex(float x,float y,float z){
-    if(inContour){contourVerts.push_back({x,y});return;}
-    if(!inShape)return;
-    shapeVerts.push_back({x,y});   // always collect 2D projection for stroke
-    if(shape3D) glVertex3f(x,y,z); // also emit immediately for explicit kinds
+void vertex(float x, float y, float z) {
+    if (inContour) { contourVerts.push_back({x,y}); return; }
+    if (!inShape)  return;
+    shapeVerts.push_back({x, y});
+    shapeVerts3D.push_back({x, y, z});
+    if (z != 0.0f) shape3D = true;
 }
 void beginContour(){inContour=true;contourVerts.clear();}
 void endContour()  {inContour=false;}
@@ -559,25 +549,46 @@ void endContour()  {inContour=false;}
 void endShape(int mode){
     if(!inShape){return;}
     bool cl=(mode==CLOSE);
-    if(shape3D){
-        // Close the immediate-mode fill pass
+    int  n3 = (int)shapeVerts3D.size();
+
+    // -- Explicit shape kinds (QUADS, QUAD_STRIP, TRIANGLES, etc.) ----------
+    // Draw fill and/or stroke from the collected vertex arrays.
+    if(shapeKind != -1 && n3 > 0){
+        GLenum gm;
+        switch(shapeKind){
+            case POINTS:        gm=GL_POINTS;        break;
+            case LINES:         gm=GL_LINES;         break;
+            case TRIANGLES:     gm=GL_TRIANGLES;     break;
+            case TRIANGLE_FAN:  gm=GL_TRIANGLE_FAN;  break;
+            case TRIANGLE_STRIP:gm=GL_TRIANGLE_STRIP;break;
+            case QUADS:         gm=GL_QUADS;         break;
+            case QUAD_STRIP:    gm=GL_QUAD_STRIP;    break;
+            default:            gm=GL_POLYGON;       break;
+        }
+
         if(doFill){
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(1.0f, 1.0f);
+            applyFill();
+            glBegin(gm);
+            for(auto& v : shapeVerts3D) glVertex3f(v[0], v[1], v[2]);
             glEnd();
             glDisable(GL_POLYGON_OFFSET_FILL);
         }
-        // Draw stroke outlines — shapeVerts was collected in vertex()
+        // Draw stroke outlines -- shapeVerts was collected in vertex()
         if(doStroke && !shapeVerts.empty()){
             applyStroke(); glLineWidth(strokeW);
             int n=(int)shapeVerts.size();
-            auto lv=[&](int i)->std::pair<float,float>{return shapeVerts[i];};
+            // Use 3D verts for correct depth in transformed space
+            auto lv=[&](int i)->std::array<float,3>{ return shapeVerts3D[i]; };
             switch(shapeKind){
                 case TRIANGLE_STRIP:
                     glBegin(GL_LINES);
                     for(int i=0;i+2<n;i++){
                         auto a=lv(i),b=lv(i+1),c=lv(i+2);
-                        glVertex2f(a.first,a.second);glVertex2f(b.first,b.second);
-                        glVertex2f(b.first,b.second);glVertex2f(c.first,c.second);
-                        glVertex2f(c.first,c.second);glVertex2f(a.first,a.second);
+                        glVertex3f(a[0],a[1],a[2]);glVertex3f(b[0],b[1],b[2]);
+                        glVertex3f(b[0],b[1],b[2]);glVertex3f(c[0],c[1],c[2]);
+                        glVertex3f(c[0],c[1],c[2]);glVertex3f(a[0],a[1],a[2]);
                     }
                     glEnd();
                     break;
@@ -585,9 +596,9 @@ void endShape(int mode){
                     glBegin(GL_LINES);
                     for(int i=1;i+1<n;i++){
                         auto a=lv(0),b=lv(i),c=lv(i+1);
-                        glVertex2f(a.first,a.second);glVertex2f(b.first,b.second);
-                        glVertex2f(b.first,b.second);glVertex2f(c.first,c.second);
-                        glVertex2f(c.first,c.second);glVertex2f(a.first,a.second);
+                        glVertex3f(a[0],a[1],a[2]);glVertex3f(b[0],b[1],b[2]);
+                        glVertex3f(b[0],b[1],b[2]);glVertex3f(c[0],c[1],c[2]);
+                        glVertex3f(c[0],c[1],c[2]);glVertex3f(a[0],a[1],a[2]);
                     }
                     glEnd();
                     break;
@@ -595,9 +606,9 @@ void endShape(int mode){
                     glBegin(GL_LINES);
                     for(int i=0;i+2<n;i+=3){
                         auto a=lv(i),b=lv(i+1),c=lv(i+2);
-                        glVertex2f(a.first,a.second);glVertex2f(b.first,b.second);
-                        glVertex2f(b.first,b.second);glVertex2f(c.first,c.second);
-                        glVertex2f(c.first,c.second);glVertex2f(a.first,a.second);
+                        glVertex3f(a[0],a[1],a[2]);glVertex3f(b[0],b[1],b[2]);
+                        glVertex3f(b[0],b[1],b[2]);glVertex3f(c[0],c[1],c[2]);
+                        glVertex3f(c[0],c[1],c[2]);glVertex3f(a[0],a[1],a[2]);
                     }
                     glEnd();
                     break;
@@ -605,10 +616,10 @@ void endShape(int mode){
                     glBegin(GL_LINES);
                     for(int i=0;i+3<n;i+=4){
                         auto a=lv(i),b=lv(i+1),c=lv(i+2),d=lv(i+3);
-                        glVertex2f(a.first,a.second);glVertex2f(b.first,b.second);
-                        glVertex2f(b.first,b.second);glVertex2f(c.first,c.second);
-                        glVertex2f(c.first,c.second);glVertex2f(d.first,d.second);
-                        glVertex2f(d.first,d.second);glVertex2f(a.first,a.second);
+                        glVertex3f(a[0],a[1],a[2]);glVertex3f(b[0],b[1],b[2]);
+                        glVertex3f(b[0],b[1],b[2]);glVertex3f(c[0],c[1],c[2]);
+                        glVertex3f(c[0],c[1],c[2]);glVertex3f(d[0],d[1],d[2]);
+                        glVertex3f(d[0],d[1],d[2]);glVertex3f(a[0],a[1],a[2]);
                     }
                     glEnd();
                     break;
@@ -616,27 +627,27 @@ void endShape(int mode){
                     glBegin(GL_LINES);
                     for(int i=0;i+3<n;i+=2){
                         auto a=lv(i),b=lv(i+1),c=lv(i+3),d=lv(i+2);
-                        glVertex2f(a.first,a.second);glVertex2f(b.first,b.second);
-                        glVertex2f(b.first,b.second);glVertex2f(c.first,c.second);
-                        glVertex2f(c.first,c.second);glVertex2f(d.first,d.second);
-                        glVertex2f(d.first,d.second);glVertex2f(a.first,a.second);
+                        glVertex3f(a[0],a[1],a[2]);glVertex3f(b[0],b[1],b[2]);
+                        glVertex3f(b[0],b[1],b[2]);glVertex3f(c[0],c[1],c[2]);
+                        glVertex3f(c[0],c[1],c[2]);glVertex3f(d[0],d[1],d[2]);
+                        glVertex3f(d[0],d[1],d[2]);glVertex3f(a[0],a[1],a[2]);
                     }
                     glEnd();
                     break;
                 default:
                     glBegin(cl?GL_LINE_LOOP:GL_LINE_STRIP);
-                    for(auto& v:shapeVerts)glVertex2f(v.first,v.second);
+                    for(auto& v:shapeVerts3D)glVertex3f(v[0],v[1],v[2]);
                     glEnd();
                     break;
             }
         }
-        inShape=false;shape3D=false;shapeVerts.clear();
+        inShape=false; shape3D=false; shapeVerts.clear(); shapeVerts3D.clear();
         return;
     }
     if(shapeVerts.empty()){inShape=false;return;}
 
     // Default beginShape() / endShape(CLOSE) path.
-    // Draw as GL_TRIANGLES from center to each edge — no stencil needed.
+    // Draw as GL_TRIANGLES from center to each edge -- no stencil needed.
     // This is correct for any star or polygon because we explicitly
     // triangulate: for each edge (v[i], v[i+1]) draw (center, v[i], v[i+1]).
     if(shapeKind==-1 || shapeKind==CLOSE){
@@ -644,29 +655,30 @@ void endShape(int mode){
             int n = (int)shapeVerts.size();
 
             // Use the actual geometric center of the shape
-            float cx=0, cy=0;
-            for(auto& v:shapeVerts){ cx+=v.first; cy+=v.second; }
-            cx/=n; cy/=n;
+            float cx=0, cy=0, cz=0;
+            for(auto& v:shapeVerts3D){ cx+=v[0]; cy+=v[1]; cz+=v[2]; }
+            cx/=n; cy/=n; cz/=n;
 
             glDisable(GL_CULL_FACE);
             applyFill();
             glBegin(GL_TRIANGLES);
             for(int i=0;i<n;i++){
                 int j=(i+1)%n;
-                glVertex2f(cx, cy);
-                glVertex2f(shapeVerts[i].first,  shapeVerts[i].second);
-                glVertex2f(shapeVerts[j].first,  shapeVerts[j].second);
+                glVertex3f(cx, cy, cz);
+                glVertex3f(shapeVerts3D[i][0], shapeVerts3D[i][1], shapeVerts3D[i][2]);
+                glVertex3f(shapeVerts3D[j][0], shapeVerts3D[j][1], shapeVerts3D[j][2]);
             }
             glEnd();
         }
         if(doStroke){
-            applyStroke();glLineWidth(strokeW);
-            glBegin(cl?GL_LINE_LOOP:GL_LINE_STRIP);
-            for(auto& v:shapeVerts)glVertex2f(v.first,v.second);
+            applyStroke(); glLineWidth(strokeW);
+            glBegin(cl ? GL_LINE_LOOP : GL_LINE_STRIP);
+            // Use 3D coords so transforms (rotateX/Y) are respected
+            for(auto& v : shapeVerts3D) glVertex3f(v[0], v[1], v[2]);
             glEnd();
         }
     }
-    inShape=false;shapeVerts.clear();
+    inShape=false; shapeVerts.clear(); shapeVerts3D.clear();
 }
 
 void bezierVertex(float cx1,float cy1,float cx2,float cy2,float x,float y){
@@ -752,7 +764,7 @@ float modelZ(float x,float y,float z) {float mv[16];glGetFloatv(GL_MODELVIEW_MAT
 // CAMERA
 // =============================================================================
 
-// Internal helper — sets up the standard Processing Y-flipped perspective
+// Internal helper -- sets up the standard Processing Y-flipped perspective
 // camera. Called by camera() and perspective() so they stay in sync.
 static void applyDefaultCamera(){
     float eyeZ = ((float)winHeight/2.0f) / std::tan(PI*60.0f/360.0f);
@@ -774,7 +786,7 @@ void camera(){
     applyDefaultCamera();
 }
 void camera(float ex,float ey,float ez,float cx,float cy,float cz,float ux,float uy,float uz){
-    // Custom camera — keep the same Y-flip projection, just change the view
+    // Custom camera -- keep the same Y-flip projection, just change the view
     float eyeZ = ((float)winHeight/2.0f) / std::tan(PI*60.0f/360.0f);
     float near_ = eyeZ/10.0f, far_ = eyeZ*10.0f;
     glMatrixMode(GL_PROJECTION); glLoadIdentity();
@@ -793,7 +805,7 @@ void perspective(){
     applyDefaultCamera();
 }
 void perspective(float fov,float aspect,float zNear,float zFar){
-    // User-supplied perspective — apply Y-flip so coords stay consistent
+    // User-supplied perspective -- apply Y-flip so coords stay consistent
     glMatrixMode(GL_PROJECTION); glLoadIdentity();
     gluPerspective(degrees(fov), aspect, zNear, zFar);
     glScalef(1,-1,1);
@@ -830,84 +842,200 @@ void printProjection(){float m[16];glGetFloatv(GL_PROJECTION_MATRIX,m);std::cout
 // LIGHTS
 // =============================================================================
 
-void lights(){
-    glEnable(GL_LIGHTING);
-    glEnable(GL_NORMALIZE);
-    // GL_COLOR_MATERIAL: glColor4f() drives the material diffuse+ambient
-    glEnable(GL_COLOR_MATERIAL);
-    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
-    lightsEnabled=true; lightIndex=0;
+// ---------------------------------------------------------------------------
+// LIGHTING
+//
+// Processing Java passes light colors in the range [0..255].
+// OpenGL fixed-function expects [0..1].  We normalise on entry.
+//
+// Light positions/directions must be submitted while the modelview matrix
+// is in EYE SPACE (camera transform only, no object transforms).
+// We use glPushMatrix/glLoadIdentity to achieve this for every light.
+// ---------------------------------------------------------------------------
 
-    // Processing Java lights() defaults:
-    //   ambient  ~21%  (53,53,53)
-    //   diffuse  ~80%  (204,204,204)
-    //   direction: from upper-left-front
-    // GL_LIGHT_MODEL_AMBIENT controls the scene-wide ambient independent of lights
-    GLfloat globalAmb[]={0.212f, 0.212f, 0.212f, 1.0f}; // 54/255
+// Convenience: normalise a 0-255 colour component to 0.0-1.0
+static inline float lc(float v) { return v / 255.0f; }
+
+// Apply all common light state and reset the index counter.
+// Call this at the start of a draw() that uses lights.
+void lights() {
+    glEnable(GL_LIGHTING);
+    glEnable(GL_NORMALIZE);          // re-normalise normals after scaling
+    glEnable(GL_COLOR_MATERIAL);
+    // Drive DIFFUSE only from glColor()/fill(). Ambient stays at OpenGL default
+    // (0.2 grey) so shadow faces are dark, matching Processing Java's reference output.
+    glColorMaterial(GL_FRONT_AND_BACK, GL_DIFFUSE);
+
+    // Explicit material ambient: Processing Java uses a dark grey ambient material
+    GLfloat matAmb[] = { 0.2f, 0.2f, 0.2f, 1.0f };
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, matAmb);
+
+    lightsEnabled = true;
+    lightIndex    = 0;
+
+    // Scene-wide ambient: matches Processing Java reference (~7.8%, value 20/255)
+    // Java uses a darker ambient than you might expect -- faces in shadow are
+    // quite dark (about 20% of fill colour), not 21%.
+    GLfloat globalAmb[] = { 0.078f, 0.078f, 0.078f, 1.0f }; // 20/255
     glLightModelfv(GL_LIGHT_MODEL_AMBIENT, globalAmb);
     glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_FALSE);
+    glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE);
 
-    // No per-light ambient — handled by global above
-    GLfloat amb[]={0.0f, 0.0f, 0.0f, 1.0f};
-    GLfloat dif[]={0.8f, 0.8f, 0.8f, 1.0f};
-    GLfloat spc[]={0.0f, 0.0f, 0.0f, 1.0f};
-    // Directional: w=0, vector points TO the light source
-    // Processing Java uses direction (0,0,-1) toward viewer,
-    // combined with the Y-flipped camera this gives upper-front shading
-    GLfloat pos[]={-1.0f, -1.0f, 1.0f, 0.0f};
+    // Default light: 80% white diffuse, directional from upper-left-front.
+    // w=0 means directional (infinite distance, no attenuation).
+    // Position vector points TOWARD the light source in eye space.
+    GLfloat noAmb[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    GLfloat dif[]   = { 0.8f, 0.8f, 0.8f, 1.0f };
+    GLfloat noSpc[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    // Processing Java default light: directional, coming from upper-left-front.
+    // In eye space the "from" direction is normalised (-1, -1, 1) -- pointing
+    // toward upper-left in front of the camera.
+    // w=0 means directional (infinite, no attenuation).
+    GLfloat pos[]   = { -0.577f, -0.577f, 0.577f, 0.0f }; // normalised (-1,-1,1)
 
     glEnable(GL_LIGHT0);
-    glLightfv(GL_LIGHT0, GL_AMBIENT,  amb);
+    glLightfv(GL_LIGHT0, GL_AMBIENT,  noAmb);
     glLightfv(GL_LIGHT0, GL_DIFFUSE,  dif);
-    glLightfv(GL_LIGHT0, GL_SPECULAR, spc);
-    // Position must be set while modelview = camera (eye space) so the
-    // direction is fixed relative to the viewer, not the world
+    glLightfv(GL_LIGHT0, GL_SPECULAR, noSpc);
+
+    // Set position in eye space so it stays fixed relative to the camera
     glPushMatrix();
     glLoadIdentity();
     glLightfv(GL_LIGHT0, GL_POSITION, pos);
     glPopMatrix();
-    lightIndex=1;
+
+    lightIndex = 1;
 }
-void noLights(){
+
+void noLights() {
     glDisable(GL_LIGHTING);
     glDisable(GL_COLOR_MATERIAL);
-    lightsEnabled=false;lightIndex=0;
+    lightsEnabled = false;
+    lightIndex    = 0;
 }
-void ambientLight(float r,float g,float b){ambientLight(r,g,b,0,0,0);}
-void ambientLight(float r,float g,float b,float x,float y,float z){
-    if(lightIndex>=8)return;GLenum lt=GL_LIGHT0+lightIndex++;
-    GLfloat col[]={r,g,b,1},pos[]={x,y,z,1};
-    glEnable(GL_LIGHTING);glEnable(lt);
-    glLightfv(lt,GL_AMBIENT,col);glLightfv(lt,GL_POSITION,pos);
+
+// Ambient light: emits equally in all directions, no diffuse.
+void ambientLight(float r, float g, float b) { ambientLight(r,g,b,0,0,0); }
+void ambientLight(float r, float g, float b, float x, float y, float z) {
+    if (lightIndex >= 8) return;
+    GLenum lt = GL_LIGHT0 + lightIndex++;
+
+    GLfloat col[] = { lc(r), lc(g), lc(b), 1.0f };
+    GLfloat pos[] = { x, y, z, 1.0f };
+    GLfloat zero[]= { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    glEnable(GL_LIGHTING);
+    glEnable(GL_NORMALIZE);
+    glEnable(GL_COLOR_MATERIAL);
+    glColorMaterial(GL_FRONT_AND_BACK, GL_DIFFUSE);
+    glEnable(lt);
+    glLightfv(lt, GL_AMBIENT,  col);
+    glLightfv(lt, GL_DIFFUSE,  zero);
+    glLightfv(lt, GL_SPECULAR, zero);
+    // Position is transformed by the current modelview (world space)
+    glLightfv(lt, GL_POSITION, pos);
 }
-void directionalLight(float r,float g,float b,float nx,float ny,float nz){
-    if(lightIndex>=8)return;GLenum lt=GL_LIGHT0+lightIndex++;
-    GLfloat col[]={r,g,b,1},pos[]={-nx,-ny,-nz,0};
-    glEnable(GL_LIGHTING);glEnable(lt);
-    glLightfv(lt,GL_DIFFUSE,col);glLightfv(lt,GL_POSITION,pos);
+
+// Directional light: parallel rays from an infinite distance (w=0).
+// 'nx,ny,nz' is the direction the light TRAVELS (toward the scene).
+// OpenGL position with w=0 points TOWARD the light source, so we negate.
+void directionalLight(float r, float g, float b, float nx, float ny, float nz) {
+    if (lightIndex >= 8) return;
+    GLenum lt = GL_LIGHT0 + lightIndex++;
+
+    GLfloat col[]  = { lc(r), lc(g), lc(b), 1.0f };
+    GLfloat pos[]  = { -nx, -ny, -nz, 0.0f };  // w=0 = directional, negated
+    GLfloat zero[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    glEnable(GL_LIGHTING);
+    glEnable(GL_NORMALIZE);
+    glEnable(GL_COLOR_MATERIAL);
+    glColorMaterial(GL_FRONT_AND_BACK, GL_DIFFUSE);
+    glEnable(lt);
+    glLightfv(lt, GL_AMBIENT,  zero);
+    glLightfv(lt, GL_DIFFUSE,  col);
+    glLightfv(lt, GL_SPECULAR, zero);
+    // Direction is in current world space (modelview at call time)
+    glLightfv(lt, GL_POSITION, pos);
 }
-void pointLight(float r,float g,float b,float x,float y,float z){
-    if(lightIndex>=8)return;GLenum lt=GL_LIGHT0+lightIndex++;
-    GLfloat col[]={r,g,b,1},pos[]={x,y,z,1};
-    glEnable(GL_LIGHTING);glEnable(lt);
-    glLightfv(lt,GL_DIFFUSE,col);glLightfv(lt,GL_POSITION,pos);
+
+// Point light: emits in all directions from a world-space position.
+void pointLight(float r, float g, float b, float x, float y, float z) {
+    if (lightIndex >= 8) return;
+    GLenum lt = GL_LIGHT0 + lightIndex++;
+
+    GLfloat col[]  = { lc(r), lc(g), lc(b), 1.0f };
+    GLfloat pos[]  = { x, y, z, 1.0f };            // w=1 = positional
+    GLfloat zero[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    glEnable(GL_LIGHTING);
+    glEnable(GL_NORMALIZE);
+    glEnable(GL_COLOR_MATERIAL);
+    glColorMaterial(GL_FRONT_AND_BACK, GL_DIFFUSE);
+    glEnable(lt);
+    glLightfv(lt, GL_AMBIENT,  zero);
+    glLightfv(lt, GL_DIFFUSE,  col);
+    glLightfv(lt, GL_SPECULAR, zero);
+    glLightf(lt, GL_CONSTANT_ATTENUATION,  1.0f);
+    glLightf(lt, GL_LINEAR_ATTENUATION,    0.0f);
+    glLightf(lt, GL_QUADRATIC_ATTENUATION, 0.0f);
+    // Position transformed by current modelview (world space)
+    glLightfv(lt, GL_POSITION, pos);
 }
-void spotLight(float r,float g,float b,float x,float y,float z,float nx,float ny,float nz,float angle,float conc){
-    if(lightIndex>=8)return;GLenum lt=GL_LIGHT0+lightIndex++;
-    GLfloat col[]={r,g,b,1},pos[]={x,y,z,1},dir[]={nx,ny,nz};
-    glEnable(GL_LIGHTING);glEnable(lt);
-    glLightfv(lt,GL_DIFFUSE,col);glLightfv(lt,GL_POSITION,pos);
-    glLightfv(lt,GL_SPOT_DIRECTION,dir);
-    glLightf(lt,GL_SPOT_CUTOFF,angle*180.0f/PI);
-    glLightf(lt,GL_SPOT_EXPONENT,conc);
+
+// Spot light: cone of light from a position toward a direction.
+// angle  = half-angle of the cone in radians (OpenGL takes degrees)
+// conc   = concentration exponent (higher = tighter beam)
+void spotLight(float r, float g, float b,
+               float x,  float y,  float z,
+               float nx, float ny, float nz,
+               float angle, float conc) {
+    if (lightIndex >= 8) return;
+    GLenum lt = GL_LIGHT0 + lightIndex++;
+
+    GLfloat col[]  = { lc(r), lc(g), lc(b), 1.0f };
+    GLfloat pos[]  = { x, y, z, 1.0f };
+    GLfloat dir[]  = { nx, ny, nz };
+    GLfloat zero[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+    glEnable(GL_LIGHTING);
+    glEnable(GL_NORMALIZE);
+    glEnable(GL_COLOR_MATERIAL);
+    glColorMaterial(GL_FRONT_AND_BACK, GL_DIFFUSE);
+    glEnable(lt);
+    glLightfv(lt, GL_AMBIENT,  zero);
+    glLightfv(lt, GL_DIFFUSE,  col);
+    glLightfv(lt, GL_SPECULAR, zero);
+    glLightfv(lt, GL_SPOT_DIRECTION, dir);
+    glLightf(lt, GL_SPOT_CUTOFF,   angle * 180.0f / PI);
+    glLightf(lt, GL_SPOT_EXPONENT, conc);
+    glLightf(lt, GL_CONSTANT_ATTENUATION,  1.0f);
+    glLightf(lt, GL_LINEAR_ATTENUATION,    0.0f);
+    glLightf(lt, GL_QUADRATIC_ATTENUATION, 0.0f);
+    // Position and spot direction transformed by current modelview
+    glLightfv(lt, GL_POSITION, pos);
 }
-void lightFalloff(float c,float l,float q){
-    for(int i=0;i<lightIndex;i++){GLenum lt=GL_LIGHT0+i;glLightf(lt,GL_CONSTANT_ATTENUATION,c);glLightf(lt,GL_LINEAR_ATTENUATION,l);glLightf(lt,GL_QUADRATIC_ATTENUATION,q);}
+
+// Override attenuation on all active lights (call after the light functions)
+void lightFalloff(float c, float l, float q) {
+    for (int i = 0; i < lightIndex; i++) {
+        GLenum lt = GL_LIGHT0 + i;
+        glLightf(lt, GL_CONSTANT_ATTENUATION,  c);
+        glLightf(lt, GL_LINEAR_ATTENUATION,    l);
+        glLightf(lt, GL_QUADRATIC_ATTENUATION, q);
+    }
 }
-void lightSpecular(float r,float g,float b){
-    for(int i=0;i<lightIndex;i++){GLenum lt=GL_LIGHT0+i;GLfloat col[]={r,g,b,1};glLightfv(lt,GL_SPECULAR,col);}
+
+// Set specular colour on all active lights
+void lightSpecular(float r, float g, float b) {
+    for (int i = 0; i < lightIndex; i++) {
+        GLenum  lt  = GL_LIGHT0 + i;
+        GLfloat col[] = { lc(r), lc(g), lc(b), 1.0f };
+        glLightfv(lt, GL_SPECULAR, col);
+    }
 }
-void normal(float nx,float ny,float nz){glNormal3f(nx,ny,nz);}
+
+void normal(float nx, float ny, float nz) { glNormal3f(nx, ny, nz); }
 
 // =============================================================================
 // MATERIAL
@@ -925,7 +1053,7 @@ void shininess(float s)               {glMaterialf(GL_FRONT_AND_BACK,GL_SHININES
 // TEXT
 // =============================================================================
 
-// ── Embedded 6×8 bitmap font fallback (ASCII 32–126) ─────────────────────────
+// -- Embedded 6x8 bitmap font fallback (ASCII 32-126) -------------------------
 static const unsigned char g_font6x8[][6] = {
     {0x00,0x00,0x00,0x00,0x00,0x00},{0x04,0x04,0x04,0x04,0x00,0x04},{0x0A,0x0A,0x00,0x00,0x00,0x00},{0x0A,0x1F,0x0A,0x1F,0x0A,0x00},{0x0E,0x15,0x1C,0x07,0x15,0x0E},{0x19,0x1A,0x02,0x04,0x0B,0x13},{0x08,0x14,0x08,0x15,0x12,0x0D},{0x04,0x04,0x00,0x00,0x00,0x00},
     {0x02,0x04,0x04,0x04,0x04,0x02},{0x08,0x04,0x04,0x04,0x04,0x08},{0x00,0x0A,0x04,0x1F,0x04,0x0A},{0x00,0x04,0x04,0x1F,0x04,0x04},{0x00,0x00,0x00,0x00,0x04,0x08},{0x00,0x00,0x00,0x1F,0x00,0x00},{0x00,0x00,0x00,0x00,0x00,0x04},{0x01,0x02,0x02,0x04,0x08,0x10},
@@ -941,7 +1069,7 @@ static const unsigned char g_font6x8[][6] = {
     {0x00,0x11,0x0A,0x04,0x0A,0x11},{0x00,0x11,0x0A,0x04,0x08,0x10},{0x00,0x1F,0x02,0x04,0x08,0x1F},{0x06,0x04,0x0C,0x04,0x04,0x06},{0x04,0x04,0x04,0x04,0x04,0x04},{0x0C,0x04,0x06,0x04,0x04,0x0C},{0x08,0x15,0x02,0x00,0x00,0x00},
 };
 
-// ── stb_truetype font state ───────────────────────────────────────────────────
+// -- stb_truetype font state ---------------------------------------------------
 #if PROCESSING_HAS_STB_TRUETYPE
 struct TTFFont {
     stbtt_fontinfo info;
@@ -983,13 +1111,13 @@ static void bakeAtlas(float pixelSize) {
 }
 #endif // PROCESSING_HAS_STB_TRUETYPE
 
-// ── Shared text state ─────────────────────────────────────────────────────────
+// -- Shared text state ---------------------------------------------------------
 static float g_textSize    = 14.0f;
 static int   g_textAlignX  = LEFT_ALIGN;
 static int   g_textAlignY  = BASELINE;
 static float g_textLeading = 0.0f;
 
-// ── Bitmap font rendering (fallback) ─────────────────────────────────────────
+// -- Bitmap font rendering (fallback) -----------------------------------------
 static const int BF_GW = 6;
 static const int BF_GH = 8;
 
@@ -1022,7 +1150,7 @@ static float bitmapStrWidth(const std::string& s, int scale) {
     return s.size() * (BF_GW+1) * scale;
 }
 
-// ── TTF rendering ─────────────────────────────────────────────────────────────
+// -- TTF rendering -------------------------------------------------------------
 #if PROCESSING_HAS_STB_TRUETYPE
 static float ttfStrWidth(const std::string& s) {
     float x = 0;
@@ -1065,7 +1193,7 @@ static void drawTTFStr(float x, float y, const std::string& s) {
 }
 #endif
 
-// ── Main renderText entry point ───────────────────────────────────────────────
+// -- Main renderText entry point -----------------------------------------------
 static float getLineWidth(const std::string& line) {
 #if PROCESSING_HAS_STB_TRUETYPE
     if (g_ttf.loaded) return ttfStrWidth(line);
@@ -1314,7 +1442,7 @@ static void key_cb(GLFWwindow* w, int k, int /*scancode*/, int action, int /*mod
         }
         // For printable keys key will be set correctly by char_cb which fires next.
 
-        // ESC is handled by the sketch — do not force-close here
+        // ESC is handled by the sketch -- do not force-close here
         if (_onKeyPressed) _onKeyPressed();
 
     } else if (action == GLFW_RELEASE) {
@@ -1350,7 +1478,7 @@ void enableDebugConsole() {
         freopen_s(&f, "CONOUT$", "w", stdout);
         freopen_s(&f, "CONOUT$", "w", stderr);
         freopen_s(&f, "CONIN$",  "r", stdin);
-        fprintf(stderr, "[debug] gcc-processing debug console enabled\n");
+        fprintf(stderr, "[debug] ProcessingGL debug console enabled\n");
         fflush(stderr);
     }
 #endif
@@ -1364,7 +1492,7 @@ void run(){
     if(!glfwInit()){
         fprintf(stderr, "[ERR] glfwInit() failed. Make sure libglfw3.dll is next to ide.exe\n");
 #ifdef _WIN32
-        MessageBoxA(NULL, "glfwInit() failed.\nMake sure libglfw3.dll and glew32.dll are next to ide.exe", "gcc-processing Error", MB_OK|MB_ICONERROR);
+        MessageBoxA(NULL, "glfwInit() failed.\nMake sure libglfw3.dll and glew32.dll are next to ide.exe", "ProcessingGL Error", MB_OK|MB_ICONERROR);
 #endif
         return;
     }
@@ -1387,10 +1515,10 @@ void run(){
     glfwWindowHint(GLFW_RESIZABLE,isResizable?GLFW_TRUE:GLFW_FALSE);
     glfwWindowHint(GLFW_SAMPLES,4);
     glfwWindowHint(GLFW_STENCIL_BITS,8);  // needed for concave shape fill
-    gWindow=glfwCreateWindow(winWidth,winHeight,"gcc-processing",nullptr,nullptr);
+    gWindow=glfwCreateWindow(winWidth,winHeight,"ProcessingGL",nullptr,nullptr);
     if(!gWindow){
 #ifdef _WIN32
-        MessageBoxA(NULL, "Window creation failed.\nCheck that your GPU supports OpenGL 2.0+", "gcc-processing Error", MB_OK|MB_ICONERROR);
+        MessageBoxA(NULL, "Window creation failed.\nCheck that your GPU supports OpenGL 2.0+", "ProcessingGL Error", MB_OK|MB_ICONERROR);
 #else
         fprintf(stderr, "[ERR] Window creation failed. Check OpenGL 2.0+ support.\n");
 #endif
@@ -1401,7 +1529,7 @@ void run(){
     if(glewErr != GLEW_OK){
 #ifdef _WIN32
         char msg[256]; snprintf(msg,sizeof(msg),"glewInit() failed: %s", glewGetErrorString(glewErr));
-        MessageBoxA(NULL, msg, "gcc-processing Error", MB_OK|MB_ICONERROR);
+        MessageBoxA(NULL, msg, "ProcessingGL Error", MB_OK|MB_ICONERROR);
 #else
         fprintf(stderr, "[ERR] glewInit() failed: %s\n", glewGetErrorString(glewErr));
 #endif
@@ -1433,7 +1561,7 @@ void run(){
     if (!tryLoadTTF("default.ttf",      g_textSize) &&
         !tryLoadTTF("src/default.ttf",  g_textSize) &&
         !tryLoadTTF("fonts/default.ttf",g_textSize)) {
-        std::cerr << "[font] default.ttf not found — using bitmap fallback\n";
+        std::cerr << "[font] default.ttf not found -- using bitmap fallback\n";
     }
 
     setup();
@@ -1474,7 +1602,7 @@ void run(){
                 glFrontFace(GL_CW);
                 glEnable(GL_NORMALIZE);
                 glClear(GL_DEPTH_BUFFER_BIT);
-                // Auto-apply the default Processing camera BEFORE draw() —
+                // Auto-apply the default Processing camera BEFORE draw() --
                 // matches Java Processing behaviour exactly. The sketch can
                 // override by calling camera() / perspective() itself.
                 // This means lights() called anywhere in draw() will always
@@ -1488,7 +1616,30 @@ void run(){
                 glClear(GL_DEPTH_BUFFER_BIT);
             }
 
-            draw();++frameCount;
+            // Reset all light slots each frame so lights from the previous
+            // frame don't accumulate. The sketch re-establishes its lights
+            // in each draw() call.
+            for (int _li = 0; _li < 8; _li++) {
+                glDisable(GL_LIGHT0 + _li);
+                // Reset each slot to black so disabled lights contribute nothing
+                GLfloat black[] = { 0.f, 0.f, 0.f, 1.f };
+                glLightfv(GL_LIGHT0+_li, GL_DIFFUSE,  black);
+                glLightfv(GL_LIGHT0+_li, GL_AMBIENT,  black);
+                glLightfv(GL_LIGHT0+_li, GL_SPECULAR, black);
+            }
+            glDisable(GL_LIGHTING);
+            glDisable(GL_COLOR_MATERIAL);
+            lightsEnabled = false;
+            lightIndex    = 0;
+            // Reset material to neutral so non-lit objects look correct
+            GLfloat matWhite[] = { 0.8f, 0.8f, 0.8f, 1.0f };
+            GLfloat matBlack[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+            glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,  matBlack);
+            glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,  matWhite);
+            glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, matBlack);
+            glMaterialf (GL_FRONT_AND_BACK, GL_SHININESS, 0.0f);
+
+            draw(); ++frameCount;
 
             glfwSwapBuffers(gWindow);
         }
@@ -1743,31 +1894,31 @@ void shape(const PShape& s,float x,float y,float w,float h){ drawPShape(s,x,y,w,
 
 static PFont currentFont;
 
-// Internal helper — try to load a TTF by path
+// Internal helper -- try to load a TTF by path
 static bool tryLoadTTF(const std::string& path, float size) {
 #if PROCESSING_HAS_STB_TRUETYPE
     if (loadTTFFile(path)) {
         g_ttf.loaded = true;
         g_textSize   = size;
         bakeAtlas(size);
-        // font load success — silent (stderr only for failures)
+        // font load success -- silent (stderr only for failures)
         return true;
     }
     std::cerr << "[font] failed to load: " << path << "\n";
 #else
-    std::cerr << "[font] stb_truetype not available — put stb_truetype.h in src/\n";
+    std::cerr << "[font] stb_truetype not available -- put stb_truetype.h in src/\n";
 #endif
     return false;
 }
 
-// loadFont — loads a .ttf file; falls back to bitmap font gracefully
+// loadFont -- loads a .ttf file; falls back to bitmap font gracefully
 PFont loadFont(const std::string& filename) {
     PFont f(filename, g_textSize);
     tryLoadTTF(filename, g_textSize);
     return f;
 }
 
-// createFont — creates font from a name/path and size
+// createFont -- creates font from a name/path and size
 PFont createFont(const std::string& name, float size, bool /*smooth*/) {
     PFont f(name, size);
     // Try as file path first, then common system paths
@@ -1781,7 +1932,7 @@ PFont createFont(const std::string& name, float size, bool /*smooth*/) {
     return f;
 }
 
-// textFont — switch to a previously loaded font
+// textFont -- switch to a previously loaded font
 void textFont(const PFont& font) {
     currentFont = font;
     g_textSize  = font.size;
