@@ -268,88 +268,8 @@ static std::string vimCmd       = "";
 
 // -- Vim tab panels --------------------------------------------------------
 // The "Vim" tab in the console area shows two sub-panels:
-//   "Binds"  -- a live-editable key binding reference file
 //   "Help"   -- a read-only cheat sheet of every supported vim operation
-enum class VimPanel { Binds, Help };
-static VimPanel vimPanel        = VimPanel::Help;
 static bool     showVimTab      = false;    // true when Vim tab is active
-// The binds file is a simple text buffer the user can edit
-static std::vector<std::string> vimBindsCode = {
-    "// ProcessingGL Vim Key Bindings",
-    "// Edit this file to document your custom binds.",
-    "// These are the default bindings -- they cannot be changed here,",
-    "// but you can add notes or reminders for your own mappings.",
-    "",
-    "// --- Normal mode motions ---",
-    "h / l         left / right",
-    "j / k         down / up",
-    "w             jump to start of next word",
-    "b             jump to start of previous word",
-    "e             jump to end of word",
-    "0             start of line",
-    "$             end of line",
-    "^             first non-blank character",
-    "gg            go to first line",
-    "G             go to last line",
-    "<n>G          go to line n",
-    "Ctrl+d / f    page down (half / full)",
-    "Ctrl+u / b    page up   (half / full)",
-    "",
-    "// --- Insert mode ---",
-    "i             insert before cursor",
-    "I             insert at start of line",
-    "a             insert after cursor",
-    "A             insert at end of line",
-    "o             open line below",
-    "O             open line above",
-    "Esc           return to Normal mode",
-    "",
-    "// --- Editing (Normal mode) ---",
-    "x             delete character under cursor",
-    "X             delete character before cursor",
-    "r<c>          replace character under cursor with c",
-    "~             toggle case",
-    "dd            delete current line (into clipboard)",
-    "D             delete to end of line",
-    "yy / Y        yank current line",
-    "p             paste below current line",
-    "P             paste above current line",
-    "cc / S        change entire line",
-    "C             change to end of line",
-    "s             substitute character",
-    "J             join line below to current",
-    "u             undo",
-    "Ctrl+r        redo",
-    ">             indent line",
-    "<             de-indent line",
-    "",
-    "// --- Visual mode ---",
-    "v             start character visual mode",
-    "V             start line visual mode",
-    "Esc           cancel selection",
-    "d / x         delete selection",
-    "y             yank selection",
-    "c             change selection",
-    "> / <         indent / de-indent selection",
-    "",
-    "// --- Clipboard ---",
-    "Ctrl+c        copy selection",
-    "Ctrl+x        cut selection",
-    "Ctrl+v        paste",
-    "",
-    "// --- File / IDE shortcuts ---",
-    "Ctrl+s        save",
-    "Ctrl+Shift+s  save as",
-    "Ctrl+o        open",
-    "Ctrl+n        new sketch",
-    "Ctrl+b        build",
-    "Ctrl+r        build and run",
-    "Ctrl+.        stop sketch",
-    "Ctrl+/        toggle comment",
-    "Ctrl+Shift+f  auto-format",
-    "Ctrl+= / -    increase / decrease font size",
-};
-static int vimBindsScroll       = 0;
 static int vimHelpScroll        = 0;
 
 // =============================================================================
@@ -442,10 +362,94 @@ static std::vector<Library> libraries = {
       "curl -sL https://github.com/nlohmann/json/releases/latest/download/json.hpp -o src/json.hpp", "" },
     { "stb_image",      "Header-only image loader",          "",                      "#include \"stb_image.h\"",
       "curl -sL https://raw.githubusercontent.com/nothings/stb/master/stb_image.h -o src/stb_image.h", "" },
-    { "Vim mode",       "Enable vim keybindings in editor",  "",                      "", "", "" },
+    // Vim mode toggle is in Tools menu, not library manager
 };
 
 static bool showLibMgr    = false;
+static bool showExamples  = false;   // Examples browser overlay
+static int  exScroll      = 0;       // scroll position in examples list
+static int  exHover       = -1;      // which row the mouse is over
+
+struct ExampleEntry {
+    std::string name;   // display name (filename without path)
+    std::string path;   // full relative path e.g. "examples/Geometry.cpp"
+    std::string desc;   // one-line description extracted from the file header
+};
+static std::vector<ExampleEntry> examplesList;
+
+// Scan examples/ directory and build the list
+static void refreshExamples() {
+    examplesList.clear();
+
+    // Map of known descriptions for built-in sketches
+    struct { const char* name; const char* desc; } known[] = {
+        { "Geometry.cpp",     "150 rotating arcs in three geometry styles" },
+        { "Mixture.cpp",      "Three light types (point, directional, spot) on a 3D box" },
+        { "Mandelbrot.cpp",   "Mandelbrot set rendered to pixel buffer" },
+        { "StoringInput.cpp", "Mouse trail using a circular ring buffer" },
+        { nullptr, nullptr }
+    };
+
+#ifdef _WIN32
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA("examples\\*.cpp", &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            ExampleEntry e;
+            e.name = fd.cFileName;
+            e.path = "examples\\" + e.name;
+            // Look up description
+            e.desc = "No description";
+            for (int k=0; known[k].name; k++)
+                if (e.name == known[k].name) { e.desc = known[k].desc; break; }
+            // Try to read first comment line from file
+            if (e.desc == "No description") {
+                std::ifstream f(e.path);
+                std::string line;
+                while (std::getline(f, line)) {
+                    if (line.size()>3 && line.substr(0,3)=="// " && line.find("===")!=0) {
+                        e.desc = line.substr(3);
+                        if (e.desc.size()>60) e.desc = e.desc.substr(0,57)+"...";
+                        break;
+                    }
+                }
+            }
+            examplesList.push_back(e);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    DIR* d = opendir("examples");
+    if (d) {
+        struct dirent* ent;
+        while ((ent = readdir(d))) {
+            std::string n = ent->d_name;
+            if (n.size()<5 || n.substr(n.size()-4) != ".cpp") continue;
+            ExampleEntry e;
+            e.name = n;
+            e.path = "examples/" + n;
+            e.desc = "No description";
+            for (int k=0; known[k].name; k++)
+                if (e.name == known[k].name) { e.desc = known[k].desc; break; }
+            if (e.desc == "No description") {
+                std::ifstream f(e.path);
+                std::string line;
+                while (std::getline(f, line)) {
+                    if (line.size()>3 && line.substr(0,3)=="// " && line.find("===")!=0) {
+                        e.desc = line.substr(3);
+                        if (e.desc.size()>60) e.desc = e.desc.substr(0,57)+"...";
+                        break;
+                    }
+                }
+            }
+            examplesList.push_back(e);
+        }
+        closedir(d);
+    }
+#endif
+    std::sort(examplesList.begin(), examplesList.end(),
+              [](const ExampleEntry& a, const ExampleEntry& b){ return a.name < b.name; });
+}
 static int  libScroll     = 0;
 static int  installingLib = -1;
 static std::string libStatus = "";
@@ -643,14 +647,27 @@ static void doOpen() {
 }
 
 static void doSaveAs(const std::string& def = "") {
-    std::string path = plat_file_dialog(true, def);
-    if (!path.empty()) saveFile(path);
-    else { fpShow=true; fpSave=true; fpInput=def; }  // fallback
+    std::string path = plat_file_dialog(true, def.empty() ? currentFile : def);
+    if (!path.empty()) {
+        // Ensure .cpp extension
+        if (path.size() < 4 || path.substr(path.size()-4) != ".cpp")
+            path += ".cpp";
+        saveFile(path);
+    } else {
+        // Native dialog unavailable -- fall back to inline picker
+        fpShow = true; fpSave = true;
+        fpInput = def.empty() ? currentFile : def;
+    }
 }
 
 static void doSave() {
-    if (currentFile.empty()) doSaveAs();
-    else saveFile(currentFile);
+    if (currentFile.empty()) {
+        doSaveAs();
+    } else {
+        saveFile(currentFile);
+        // Update window title to remove the modified (*) marker
+        windowTitle("ProcessingGL IDE -- " + currentFile);
+    }
 }
 
 static std::vector<std::string> listSketches() {
@@ -660,6 +677,93 @@ static std::vector<std::string> listSketches() {
 // =============================================================================
 // SKETCH SANITIZER  (strips BOM / smart quotes before writing Sketch_run.cpp)
 // =============================================================================
+
+// ---------------------------------------------------------------------------
+// Java -> C++ keyword translation
+// Replaces whole-word occurrences of Java-only keywords with their C++
+// equivalents. Applied to every line before writing to Sketch_run.cpp.
+// ---------------------------------------------------------------------------
+static std::string javaToC(const std::string& line) {
+    // Table of whole-word replacements: { java_token, cpp_token }
+    static const std::pair<std::string,std::string> REPLACEMENTS[] = {
+        // Java primitive types that differ
+        { "boolean",   "bool"        },
+        { "Integer",   "int"         },
+        { "Float",     "float"       },
+        { "Double",    "double"      },
+        { "Long",      "long"        },
+        { "Byte",      "char"        },
+        { "Character", "char"        },
+        { "String",    "std::string" },
+        // Java literals
+        { "true",      "true"        }, // same but ensure no mangling
+        { "false",     "false"       },
+        { "null",      "nullptr"     },
+        // Java cast syntax  float(x) -> (float)(x)  int(x) -> (int)(x)
+        // Handled separately below as they need special treatment.
+        // Java array declaration  int[] x  ->  int x[]  (already valid C++)
+        // Java new array  new float[n]  ->  just removed (static arrays used)
+        // Trailing semicolons on class-level booleans etc are already fine.
+    };
+
+    // Skip lines that are pure comments or preprocessor directives
+    std::string trimmed = line;
+    while (!trimmed.empty() && (trimmed[0]==' '||trimmed[0]=='\t')) trimmed=trimmed.substr(1);
+    bool isComment = (trimmed.size()>=2 && trimmed[0]=='/' && (trimmed[1]=='/'||trimmed[1]=='*'));
+    bool isPreproc = (!trimmed.empty() && trimmed[0]=='#');
+    if (isComment || isPreproc) return line;
+
+    std::string out = line;
+
+    // Whole-word replacement: only replace when surrounded by non-identifier chars
+    auto isIdChar = [](char c){ return isalnum((unsigned char)c) || c=='_'; };
+
+    for (auto& [from, to] : REPLACEMENTS) {
+        std::string result;
+        size_t pos = 0;
+        while (pos < out.size()) {
+            size_t found = out.find(from, pos);
+            if (found == std::string::npos) { result += out.substr(pos); break; }
+            // Check word boundaries
+            bool leftOk  = (found == 0)              || !isIdChar(out[found-1]);
+            bool rightOk = (found+from.size() >= out.size()) || !isIdChar(out[found+from.size()]);
+            if (leftOk && rightOk) {
+                result += out.substr(pos, found-pos);
+                result += to;
+                pos = found + from.size();
+            } else {
+                result += out.substr(pos, found-pos+1);
+                pos = found + 1;
+            }
+        }
+        out = result;
+    }
+
+    // Java cast syntax: float(expr) -> (float)(expr)
+    // Matches: float( int( double( etc. at word boundary not preceded by identifier
+    static const char* CAST_TYPES[] = { "float","int","double","long","char","bool",nullptr };
+    for (int ci = 0; CAST_TYPES[ci]; ci++) {
+        std::string pat = std::string(CAST_TYPES[ci]) + "(";
+        std::string result;
+        size_t pos = 0;
+        while (pos < out.size()) {
+            size_t found = out.find(pat, pos);
+            if (found == std::string::npos) { result += out.substr(pos); break; }
+            bool leftOk = (found==0) || !isIdChar(out[found-1]);
+            if (leftOk) {
+                result += out.substr(pos, found-pos);
+                result += std::string("(") + CAST_TYPES[ci] + ")(";
+                pos = found + pat.size();
+            } else {
+                result += out.substr(pos, found-pos+1);
+                pos = found + 1;
+            }
+        }
+        out = result;
+    }
+
+    return out;
+}
 
 static std::string sanitizeLine(const std::string& s) {
     std::string out;
@@ -688,7 +792,8 @@ static std::string sanitizeLine(const std::string& s) {
         else if (c >= 0xF0 && i+3 < s.size())                { i += 3; }
         // else: drop stray high byte
     }
-    return out;
+    // Apply Java->C++ keyword translation after encoding cleanup
+    return javaToC(out);
 }
 
 static bool writeSketch() {
@@ -1247,7 +1352,7 @@ static void drawMenuBar() {
     else if (openMenu==Menu::Sketch)
         drawDropdown(84, MENUBAR_H, {{"Build","Ctrl+B"},{"Run","Ctrl+R"},{"Stop","Ctrl+."},{"---",""},{"Show Folder",""},{"Export Binary",""}});
     else if (openMenu==Menu::Tools)
-        drawDropdown(138, MENUBAR_H, {{"Serial Monitor","Ctrl+Shift+M"},{"---",""},{"Toggle Vim Mode","Ctrl+Shift+V"},{"Auto Format","Ctrl+Shift+F"},{"---",""},{"Increase Font","Ctrl+="},{"Decrease Font","Ctrl+-"}});
+        drawDropdown(138, MENUBAR_H, {{"Serial Monitor","Ctrl+Shift+M"},{"Examples","Ctrl+Shift+E"},{"---",""},{"Toggle Vim Mode","Ctrl+Shift+V"},{"Auto Format","Ctrl+Shift+F"},{"---",""},{"Increase Font","Ctrl+="},{"Decrease Font","Ctrl+-"}});
     else if (openMenu==Menu::Libraries)
         drawDropdown(182, MENUBAR_H, {{"Manage Libraries...","Ctrl+Shift+L"},{"---",""},{"Add #include",""}});
 }
@@ -1278,8 +1383,15 @@ static void drawToolbar() {
         iText(mode, textWidth(title)+24, ty+TOOLBAR_H*0.68f, 255, 255, 255, FST);
     }
 
+    // Examples button
+    float epx = width-304, epy = ty+6, epw = 80, eph = TOOLBAR_H-12;
+    bool  epH = mouseX>=epx && mouseX<=epx+epw && mouseY>=epy && mouseY<=epy+eph;
+    qFill(epx, epy, epw, eph, epH?38:26, epH?120:85, epH?70:52);
+    qBorder(epx, epy, epw, eph, 55, 160, 100);
+    iText("Examples", epx+5, epy+eph*0.72f, epH?210:170, epH?245:215, epH?220:190, FST);
+
     // Terminal dock toggle
-    float tpx = width-300, tpy = ty+6, tpw = 86, tph = TOOLBAR_H-12;
+    float tpx = width-300-epw-8, tpy = ty+6, tpw = 86, tph = TOOLBAR_H-12;
     bool  tpH = mouseX>=tpx && mouseX<=tpx+tpw && mouseY>=tpy && mouseY<=tpy+tph;
     qFill(tpx, tpy, tpw, tph, tpH?44:30, tpH?46:32, tpH?62:46);
     qBorder(tpx, tpy, tpw, tph, 65, 65, 65);
@@ -1426,7 +1538,7 @@ static void drawEditor() {
 // =============================================================================
 
 // =============================================================================
-// VIM TAB  --  Binds editor + full help cheat sheet
+// VIM TAB  --  vim operation cheat sheet
 // =============================================================================
 
 // The complete list of every supported vim operation with a description
@@ -1574,117 +1686,56 @@ static const char* VIM_HELP[] = {
 };
 
 static void drawVimTab() {
-    int   cy  = consoleY(), cx = consoleX(), cw = consoleW();
-    int   consH = (terminalPos == TermPos::Right) ? height - editorY() : CONSOLE_H;
+    int   cy   = consoleY(), cx = consoleX(), cw = consoleW();
+    int   consH= (terminalPos == TermPos::Right) ? height - editorY() : CONSOLE_H;
 
     qFill(cx+4, cy+4, cw-4, consH-4, 18, 18, 24);
 
-    // Sub-panel selector tabs: [Binds] [Help]
-    float bx = (float)(cx + 8);
-    float by = (float)(cy + 4 + TAB_H + 4);
-
-    // "Binds" sub-tab
-    bool bindsActive = (vimPanel == VimPanel::Binds);
-    bool bindsHov    = mouseX>=bx && mouseX<=bx+58 && mouseY>=by && mouseY<=by+18;
-    qFill(bx, by, 58, 18, bindsActive?32:bindsHov?28:22, bindsActive?34:bindsHov?30:23, bindsActive?55:bindsHov?46:34);
-    if (bindsActive) qLine(bx, by+17, bx+58, by+17, 17, 108, 179);
-    iText("Binds", bx+8, by+14, bindsActive?230:150, bindsActive?235:155, bindsActive?255:185, FST);
-
-    // "Help" sub-tab
-    float hx = bx + 64;
-    bool helpActive = (vimPanel == VimPanel::Help);
-    bool helpHov    = mouseX>=hx && mouseX<=hx+52 && mouseY>=by && mouseY<=by+18;
-    qFill(hx, by, 52, 18, helpActive?32:helpHov?28:22, helpActive?34:helpHov?30:23, helpActive?55:helpHov?46:34);
-    if (helpActive) qLine(hx, by+17, hx+52, by+17, 17, 108, 179);
-    iText("Help", hx+8, by+14, helpActive?230:150, helpActive?235:155, helpActive?255:185, FST);
-
-    float contentTop = by + 24;
+    float contentTop = (float)(cy + 4 + TAB_H + 6);
     float lh         = FST * 1.6f;
-    int   contentH   = consH - 4 - TAB_H - 28;
+    int   contentH   = consH - 4 - TAB_H - 10;
     int   visRows    = std::max(1, (int)(contentH / lh));
 
-    if (vimPanel == VimPanel::Binds) {
-        // -- Binds editor -- a simple scrollable text buffer --------------
-        // Header
-        iText("Key Bindings (read only -- edit in src/vim_binds.txt)",
-              cx+8, contentTop + lh - 3, 100, 120, 170, FST);
-        contentTop += lh + 4;
-        visRows = std::max(1, (int)((consH - 4 - TAB_H - 28 - lh - 4) / lh));
+    // Count entries
+    int total = 0;
+    while (VIM_HELP[total]) total++;
 
-        vimBindsScroll = std::max(0, std::min(vimBindsScroll,
-                         std::max(0, (int)vimBindsCode.size() - visRows)));
+    vimHelpScroll = std::max(0, std::min(vimHelpScroll,
+                    std::max(0, total - visRows)));
 
-        for (int i = 0; i < visRows; i++) {
-            int li = vimBindsScroll + i;
-            if (li >= (int)vimBindsCode.size()) break;
-            auto& line = vimBindsCode[li];
-            float ry = contentTop + i * lh;
-            bool isComment = !line.empty() && line[0] == '/';
-            bool isEmpty   = line.empty();
-            int r = isEmpty ? 0 : (isComment ? 106 : 188);
-            int g = isEmpty ? 0 : (isComment ? 153 : 192);
-            int b = isEmpty ? 0 : (isComment ?  85 : 220);
-            iText(line, cx+14, ry + lh - 3, r, g, b, FST);
-        }
-        // Scrollbar
-        if ((int)vimBindsCode.size() > visRows) {
-            float th  = contentH - lh - 4;
-            float sbH = std::max(6.f, (float)visRows / vimBindsCode.size() * th);
-            float sbY = contentTop + (float)vimBindsScroll / vimBindsCode.size() * th;
-            qFill(cx+cw-6, contentTop, 6, th, 38, 38, 38);
-            qFill(cx+cw-6, sbY, 6, sbH, 80, 80, 80);
-        }
-
-    } else {
-        // -- Help: full cheat sheet -----------------------------------------
-        // Count entries
-        int total = 0;
-        while (VIM_HELP[total]) total++;
-
-        vimHelpScroll = std::max(0, std::min(vimHelpScroll,
-                        std::max(0, total - visRows)));
-
-        for (int i = 0; i < visRows; i++) {
-            int li = vimHelpScroll + i;
-            if (li >= total || !VIM_HELP[li]) break;
-            std::string line = VIM_HELP[li];
-            float ry = contentTop + i * lh;
-            // Section headers are "=== ... ==="
-            bool isHeader  = line.size()>3 && line[0]=='=' && line[1]=='=';
-            bool isEmpty   = line.empty();
-            bool isComment = !line.empty() && line[0]=='/';
-            int r, g, b;
-            if      (isHeader)  { r=17;  g=158; b=255; }  // bright blue header
-            else if (isEmpty)   { r=0;   g=0;   b=0;   }
-            else if (isComment) { r=106; g=153; b=85;  }
-            else {
-                // Key part in yellow, description in grey
-                size_t sp = line.find("   ");
-                if (sp != std::string::npos) {
-                    std::string key  = line.substr(0, sp);
-                    std::string desc = line.substr(sp);
-                    textSize(FST);
-                    float kw = textWidth(key);
-                    iText(key,  cx+14,      ry+lh-3, 220, 210, 100, FST);
-                    iText(desc, cx+14+kw,   ry+lh-3, 140, 148, 170, FST);
-                    continue;
-                }
-                r=188; g=192; b=200;
+    for (int i = 0; i < visRows; i++) {
+        int li = vimHelpScroll + i;
+        if (li >= total || !VIM_HELP[li]) break;
+        std::string line = VIM_HELP[li];
+        float ry = contentTop + i * lh;
+        bool isHeader = line.size()>3 && line[0]=='=' && line[1]=='=';
+        bool isEmpty  = line.empty();
+        int r=188, g=192, b=200;
+        if (isHeader) { r=17; g=158; b=255; }
+        else if (!isEmpty) {
+            size_t sp = line.find("   ");
+            if (sp != std::string::npos) {
+                std::string key  = line.substr(0, sp);
+                std::string desc = line.substr(sp);
+                textSize(FST);
+                float kw = textWidth(key);
+                iText(key,  cx+14,    ry+lh-3, 220, 210, 100, FST);
+                iText(desc, cx+14+kw, ry+lh-3, 140, 148, 170, FST);
+                continue;
             }
-            iText(line, cx+14, ry+lh-3, r, g, b, FST);
         }
+        if (!isEmpty) iText(line, cx+14, ry+lh-3, r, g, b, FST);
+    }
 
-        // Scrollbar
-        if (total > visRows) {
-            float th  = (float)contentH;
-            float sbH = std::max(6.f, (float)visRows / total * th);
-            float sbY = contentTop + (float)vimHelpScroll / total * th;
-            qFill(cx+cw-6, contentTop, 6, th, 38, 38, 38);
-            qFill(cx+cw-6, sbY, 6, sbH, 80, 80, 80);
-        }
+    // Scrollbar
+    if (total > visRows) {
+        float th  = (float)contentH;
+        float sbH = std::max(6.f, (float)visRows / total * th);
+        float sbY = contentTop + (float)vimHelpScroll / total * th;
+        qFill(cx+cw-6, contentTop, 6, th, 38, 38, 38);
+        qFill(cx+cw-6, sbY, 6, sbH, 80, 80, 80);
     }
 }
-
 static void drawConsole() {
     // Snapshot output lines to avoid holding lock during render
     std::vector<std::string> snap;
@@ -1732,11 +1783,7 @@ static void drawConsole() {
         text(terminals[i].name, tx+6, cy+4+TAB_H-6);
         tx += tw + 2;
     }
-    // New tab (+) button
-    bool ntH = mouseX>=tx && mouseX<=tx+20 && mouseY>=cy+4 && mouseY<=cy+4+TAB_H;
-    qFill(tx, cy+4, 20, TAB_H, ntH?38:26, ntH?40:28, ntH?56:40);
-    fill(ntH?200:120, ntH?210:130, ntH?255:180);
-    text("+", tx+5, cy+4+TAB_H-6);
+    // (new tab button removed -- use terminals for multiple output views)
 
     // Vim special tab (right-aligned)
     textSize(FST);
@@ -1952,6 +1999,112 @@ static void drawSerialMonitor() {
 // LIBRARY MANAGER OVERLAY
 // =============================================================================
 
+static void drawExamples() {
+    // Dim the background like other overlays
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    qFill(0, 0, width, height, 0, 0, 0, 180);
+
+    float pw = 580, ph = 480;
+    float px = (width  - pw) * 0.5f;
+    float py = (height - ph) * 0.5f;
+
+    // Panel background
+    qFill(px, py, pw, ph, 24, 25, 34);
+    qBorder(px, py, pw, ph, 60, 65, 90);
+
+    // Header bar
+    qFill(px, py, pw, 36, 32, 34, 48);
+    qLine(px, py+36, px+pw, py+36, 55, 58, 80);
+    iText("Examples", px+14, py+25, 228, 232, 255, FS);
+
+    // Refresh button
+    float rBx = px+pw-90, rBy = py+8, rBw = 80, rBh = 22;
+    bool  rBH = mouseX>=rBx&&mouseX<=rBx+rBw&&mouseY>=rBy&&mouseY<=rBy+rBh;
+    qFill(rBx, rBy, rBw, rBh, rBH?35:24, rBH?80:55, rBH?55:38);
+    qBorder(rBx, rBy, rBw, rBh, 55, 130, 90);
+    iText("Refresh", rBx+10, rBy+rBh*0.78f, 140, 220, 160, FST);
+
+    // Close button
+    float xBx = px+pw-34, xBy = py+8, xBw = 24, xBh = 22;
+    bool  xBH = mouseX>=xBx&&mouseX<=xBx+xBw&&mouseY>=xBy&&mouseY<=xBy+xBh;
+    qFill(xBx, xBy, xBw, xBh, xBH?180:80, xBH?40:32, xBH?44:38);
+    iText("X", xBx+7, xBy+xBh*0.78f, 240, 200, 200, FST);
+
+    // Column headers
+    float hy = py + 44;
+    qFill(px, hy, pw, 20, 32, 34, 48);
+    iText("Sketch",      px+14,       hy+14, 120, 128, 165, FST);
+    iText("Description", px+190,      hy+14, 120, 128, 165, FST);
+    iText("Action",      px+pw-110,   hy+14, 120, 128, 165, FST);
+
+    // List area
+    float ly     = hy + 22;
+    float rowH   = 38.f;
+    int   visRows = (int)((ph - (ly - py) - 8) / rowH);
+
+    if (examplesList.empty()) {
+        iText("No .cpp files found in examples/",
+              px+20, ly+24, 140, 145, 170, FST);
+        iText("Place your sketches in the examples/ folder next to the IDE.",
+              px+20, ly+44, 90, 95, 120, FST);
+    }
+
+    exScroll = std::max(0, std::min(exScroll,
+                std::max(0, (int)examplesList.size() - visRows)));
+
+    exHover = -1;
+    for (int i = 0; i < visRows; i++) {
+        int li = exScroll + i;
+        if (li >= (int)examplesList.size()) break;
+        auto& ex  = examplesList[li];
+        float ry  = ly + i * rowH;
+        bool  hov = mouseX>=px && mouseX<=px+pw && mouseY>=ry && mouseY<=ry+rowH;
+        if (hov) exHover = li;
+
+        // Row background
+        qFill(px, ry, pw, rowH, hov?34:24, hov?36:26, hov?52:36);
+        qLine(px, ry+rowH-1, px+pw, ry+rowH-1, 42, 44, 60);
+
+        // Filename (truncated)
+        std::string nm = ex.name;
+        textSize(FST);
+        while (nm.size()>2 && textWidth(nm)>170) nm.pop_back();
+        iText(nm, px+14, ry+rowH*0.70f, 210, 218, 248, FST);
+
+        // Description (truncated)
+        std::string ds = ex.desc;
+        while (ds.size()>2 && textWidth(ds)>pw-290) ds.pop_back();
+        iText(ds, px+190, ry+rowH*0.70f, 140, 148, 175, FST);
+
+        // Open button
+        float bx2 = px+pw-108, by2 = ry+6, bw2 = 50, bh2 = rowH-12;
+        bool  bH  = mouseX>=bx2&&mouseX<=bx2+bw2&&mouseY>=by2&&mouseY<=by2+bh2;
+        qFill(bx2, by2, bw2, bh2, bH?28:20, bH?100:72, bH?188:148);
+        qBorder(bx2, by2, bw2, bh2, 40, 140, 210);
+        iText("Open", bx2+8, by2+bh2*0.76f, 210, 230, 255, FST);
+
+        // Run button
+        float rx2 = bx2+54, ry2 = by2;
+        bool  rH2 = mouseX>=rx2&&mouseX<=rx2+bw2&&mouseY>=ry2&&mouseY<=ry2+bh2;
+        qFill(rx2, ry2, bw2, bh2, rH2?20:14, rH2?130:100, rH2?60:44);
+        qBorder(rx2, ry2, bw2, bh2, 30, 170, 80);
+        iText("Run", rx2+10, ry2+bh2*0.76f, 160, 240, 180, FST);
+    }
+
+    // Scrollbar
+    if ((int)examplesList.size() > visRows) {
+        float th  = visRows * rowH;
+        float sbH = std::max(16.f, (float)visRows / examplesList.size() * th);
+        float sbY = ly + (float)exScroll / examplesList.size() * th;
+        qFill(px+pw-6, ly, 6, th, 30, 32, 44);
+        qFill(px+pw-6, sbY, 6, sbH, 80, 90, 130);
+    }
+
+    // Footer hint
+    iText("Tip: place .cpp sketches in examples/ -- they appear here automatically.",
+          px+14, py+ph-10, 70, 75, 100, FST);
+}
+
 static void drawLibMgr() {
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     qFill(0, 0, width, height, 0, 0, 0, 175);
@@ -2090,19 +2243,11 @@ void setup() {
 
     checkInstalled();
     // Tree is populated when user clicks "Open" -- not on startup
+    refreshExamples();  // scan examples/ on startup
     outLines.push_back("ProcessingGL ready.");
     outLines.push_back("Ctrl+B build | Ctrl+R run | Ctrl+. stop | Ctrl+Shift+M serial | Ctrl+Shift+L libs");
 
-    // Load vim binds file from files/ directory
-    {
-        std::ifstream vbf("files/vim_binds.txt");
-        if (vbf.good()) {
-            vimBindsCode.clear();
-            std::string vline;
-            while (std::getline(vbf, vline)) vimBindsCode.push_back(vline);
-            outLines.push_back("Loaded files/vim_binds.txt");
-        }
-    }
+
 }
 
 // Draw an animated build progress bar overlaid at the bottom of the editor.
@@ -2176,9 +2321,10 @@ void draw() {
     // Build progress bar overlaid on editor while building
     if (isBuilding.load()) drawBuildProgress();
 
-    if (fpShow)     drawFilePicker();
-    if (showSerial) drawSerialMonitor();
-    if (showLibMgr) drawLibMgr();
+    if (fpShow)       drawFilePicker();
+    if (showSerial)   drawSerialMonitor();
+    if (showLibMgr)   drawLibMgr();
+    if (showExamples) drawExamples();
     drawToolbar();   // chrome always on top
     drawMenuBar();
 }
@@ -2243,6 +2389,34 @@ void mousePressed() {
             return;
         }
         if (mouseX>=cx2&&mouseX<=cx2+cw2&&mouseY>=sendY+8&&mouseY<=sendY+36) { serialLog.clear(); return; }
+        return;
+    }
+
+    // --- Examples browser ---
+    if (showExamples) {
+        float pw=580,ph=480,px=(width-pw)*0.5f,py=(height-ph)*0.5f;
+        if (mouseX<px||mouseX>px+pw||mouseY<py||mouseY>py+ph) { showExamples=false; return; }
+        // Close X button
+        if (mouseX>=px+pw-34&&mouseX<=px+pw-10&&mouseY>=py+8&&mouseY<=py+30) { showExamples=false; return; }
+        // Refresh button
+        if (mouseX>=px+pw-90&&mouseX<=px+pw-34&&mouseY>=py+8&&mouseY<=py+30) { refreshExamples(); return; }
+        // Row Open/Run buttons
+        float ly=py+44+22, rowH=38.f;
+        int   vis=(int)((ph-(ly-py)-8)/rowH);
+        for (int i=0;i<vis;i++) {
+            int li=exScroll+i;
+            if (li>=(int)examplesList.size()) break;
+            float ry=ly+i*rowH;
+            auto& ex=examplesList[li];
+            float bx2=px+pw-108,by2=ry+6,bw2=50,bh2=rowH-12;
+            if (mouseX>=bx2&&mouseX<=bx2+bw2&&mouseY>=by2&&mouseY<=by2+bh2) {
+                openFile(ex.path); showExamples=false; return;
+            }
+            float rx2=bx2+54;
+            if (mouseX>=rx2&&mouseX<=rx2+bw2&&mouseY>=by2&&mouseY<=by2+bh2) {
+                openFile(ex.path); showExamples=false; pendingRun=true; doCompile(); return;
+            }
+        }
         return;
     }
 
@@ -2344,13 +2518,15 @@ void mousePressed() {
                 else if (lbl=="Save As...")         doSaveAs(currentFile);
                 else if (lbl=="Exit")               {stopSketch();exit_sketch();}
                 else if (lbl=="Build")              doCompile();
+                else if (lbl=="Examples")           { refreshExamples(); showExamples=true; }
                 else if (lbl=="Run")                doRun();
                 else if (lbl=="Stop")               doStop();
                 else if (lbl=="Show Folder")        plat_open_folder(".");
+                else if (lbl=="Examples")           { refreshExamples(); showExamples=!showExamples; }
                 else if (lbl=="Toggle Vim Mode")    {vimMode=!vimMode;vimInsert=false;vimState=VimState::NORMAL;}
                 else if (lbl=="Auto Format")        {} // handled in keyPressed
-                else if (lbl=="Increase Font")      {FS=std::min(32.0f,FS+1);FSS=FS-1;FST=FS-2;}
-                else if (lbl=="Decrease Font")      {FS=std::max(8.0f,FS-1);FSS=FS-1;FST=FS-2;}
+                else if (lbl=="Increase Font")      {FS=std::min(32.0f,FS+1);}
+                else if (lbl=="Decrease Font")      {FS=std::max(8.0f,FS-1);}
                 else if (lbl=="Serial Monitor")     {showSerial=true;checkInstalled();}
                 else if (lbl=="Manage Libraries..."){showLibMgr=true;checkInstalled();}
                 return;
@@ -2366,6 +2542,9 @@ void mousePressed() {
             if (mouseX>=width-196&&mouseX<=width-196+bw) { doCompile(); return; }
             if (mouseX>=width-96 &&mouseX<=width-96+bw)  { doRun();     return; }
         }
+        // Examples button
+        { float epx2=(float)(width-304), epw2=80;
+          if (mouseX>=epx2&&mouseX<=epx2+epw2) { refreshExamples(); showExamples=true; return; } }
         if (mouseX>=width-300&&mouseX<=width-214)    { terminalPos=(terminalPos==TermPos::Bottom)?TermPos::Right:TermPos::Bottom; return; }
     }
 
@@ -2400,7 +2579,7 @@ void mousePressed() {
                 if (mouseX>=tx&&mouseX<=tx+tw) { activeTab=i; consoleSelLine=-1; showVimTab=false; return; }
                 tx+=tw+2;
             }
-            if (mouseX>=tx&&mouseX<=tx+20) { terminals.push_back({"Tab "+std::to_string(terminals.size()+1),{},0,false}); activeTab=(int)terminals.size()-1; showVimTab=false; return; }
+            // + button removed
             return;
         }
 
@@ -2410,24 +2589,19 @@ void mousePressed() {
         float cbw2=68, cbx=(float)(consoleX()+consoleW()-_vtw-8-cbw2-4);
         float cby2=(float)(consoleY()+5), cbh=(float)(TAB_H-2);
         if (mouseX>=cbx&&mouseX<=cbx+cbw2&&mouseY>=cby2&&mouseY<=cby2+cbh) {
+            // Copy all lines from the active tab to clipboard
             std::string all;
             { std::lock_guard<std::mutex> lk(outMutex);
-              for (int t=0;t<(int)terminals.size();t++) {
-                  if (terminals.size()>1) all += "--- " + terminals[t].name + " ---\n";
-                  for (auto& l:terminals[t].lines) all+=l+"\n";
-                  if (t+1<(int)terminals.size()) all+="\n";
-              }
+              auto& lines = terminals[activeTab].lines;
+              for (auto& l : lines) { all += l; all += "\n"; }
             }
-            setClip(all);
+            if (!all.empty()) {
+                setClip(all);
+                outLines.push_back("Copied " + std::to_string(
+                    std::count(all.begin(), all.end(), '\n')) + " lines to clipboard.");
+                outScroll = std::max(0, (int)outLines.size() - 10);
+            }
             return;
-        }
-
-        // Vim sub-panel tab clicks (Binds / Help)
-        if (showVimTab && mouseY >= cy+4+TAB_H+4 && mouseY <= cy+4+TAB_H+22) {
-            float bx2 = (float)(consoleX() + 8);
-            float by2 = (float)(cy + 4 + TAB_H + 4);
-            if (mouseX>=bx2&&mouseX<=bx2+58) { vimPanel=VimPanel::Binds; return; }
-            if (mouseX>=bx2+64&&mouseX<=bx2+116) { vimPanel=VimPanel::Help; return; }
         }
 
         // Line click -- copy line to clipboard
@@ -2515,24 +2689,27 @@ void mouseWheel(int delta) {
     auto* win=glfwGetCurrentContext();
     bool ctrl=win&&(glfwGetKey(win,GLFW_KEY_LEFT_CONTROL)==GLFW_PRESS||glfwGetKey(win,GLFW_KEY_RIGHT_CONTROL)==GLFW_PRESS);
 
-    if (showLibMgr) { libScroll+=delta; return; }
+    if (showLibMgr)   { libScroll+=delta; return; }
+    if (showExamples) {
+        int vis=(int)((480.f-90.f)/38.f);
+        exScroll=std::max(0,std::min(exScroll+delta,
+                 std::max(0,(int)examplesList.size()-vis)));
+        return;
+    }
     if (showSerial) { serialScroll+=delta; return; }
-    if (ctrl) { FS=std::max(8.0f,std::min(32.0f,FS-(float)delta)); FSS=FS-1; FST=FS-2; return; }
+    if (ctrl) { FS=std::max(8.0f,std::min(32.0f,FS-(float)delta)); return; }
     if (sidebarVisible&&mouseX<SIDEBAR_W) { ftScroll=std::max(0,ftScroll+delta); return; }
     if (mouseY>=editorY()&&mouseY<editorY()+editorH()) {
         scrollTop=std::max(0,std::min(scrollTop+delta*3,std::max(0,(int)code.size()-visLines()))); return;
     }
     if (mouseY>=consoleY()) {
         if (showVimTab) {
-            if (vimPanel == VimPanel::Binds) {
-                vimBindsScroll = std::max(0, vimBindsScroll + delta * 2);
-            } else {
-                int total = 0;
-                while (VIM_HELP[total]) total++;
-                float lh2b = FST * 1.6f;
-                int vis2 = std::max(1,(int)((CONSOLE_H-4-TAB_H-28)/lh2b));
-                vimHelpScroll = std::max(0,std::min(vimHelpScroll+delta*2,std::max(0,total-vis2)));
-            }
+            int total2 = 0;
+            while (VIM_HELP[total2]) total2++;
+            float lhv = FST * 1.6f;
+            int visv = std::max(1,(int)((CONSOLE_H-4-TAB_H-10)/lhv));
+            vimHelpScroll = std::max(0,std::min(vimHelpScroll+delta*2,std::max(0,total2-visv)));
+            return;
         } else {
             float lh2=FSS*1.5f; int vis=std::max(1,(int)((CONSOLE_H-4-TAB_H)/lh2));
             auto& ts=terminals[activeTab].scroll; auto& tl=terminals[activeTab].lines;
@@ -2586,7 +2763,7 @@ void keyPressed() {
     // --- ESC: close modals or exit vim modes ---
     if (keyCode==ESC) {
         if (vimMode&&vimState!=VimState::NORMAL) { vimState=VimState::NORMAL; vimInsert=false; clearSel(); clamp(); return; }
-        if (showSerial||showLibMgr||fpShow) { showSerial=showLibMgr=fpShow=false; return; }
+        if (showSerial||showLibMgr||fpShow||showExamples) { showSerial=showLibMgr=fpShow=showExamples=false; return; }
         if (openMenu!=Menu::None) { openMenu=Menu::None; return; }
         clearSel(); return;
     }
@@ -2677,6 +2854,7 @@ void keyPressed() {
         if (keyCode==GLFW_KEY_R) { doRun(); return; }
         if (keyCode==GLFW_KEY_M&&shift) { showSerial=true; return; }
         if (keyCode==GLFW_KEY_L&&shift) { showLibMgr=true;checkInstalled(); return; }
+        if (keyCode==GLFW_KEY_E&&shift) { refreshExamples();showExamples=!showExamples; return; }
         if (keyCode==GLFW_KEY_V&&shift) { vimMode=!vimMode;vimInsert=false;vimState=VimState::NORMAL; return; }
         if (keyCode==GLFW_KEY_Z&&!shift) { if(!undoStack.empty()){auto&u=undoStack.back();redoStack.push_back({code,{curLine,curCol}});code=u.first;curLine=u.second.first;curCol=u.second.second;undoStack.pop_back();clearSel();clamp();ensureVis();} return; }
         if (keyCode==GLFW_KEY_Y||(keyCode==GLFW_KEY_Z&&shift)) { if(!redoStack.empty()){auto&u=redoStack.back();undoStack.push_back({code,{curLine,curCol}});code=u.first;curLine=u.second.first;curCol=u.second.second;redoStack.pop_back();clearSel();clamp();ensureVis();} return; }
@@ -2693,8 +2871,8 @@ void keyPressed() {
         if (keyCode==GLFW_KEY_D) { pushUndo();code.insert(code.begin()+curLine+1,code[curLine]);curLine++;clamp();ensureVis(); return; }
         if (keyCode==GLFW_KEY_SLASH) { pushUndo();auto&ln=code[curLine];if(ln.size()>=2&&ln[0]=='/'&&ln[1]=='/')ln.erase(0,2);else ln="//"+ln; return; }
         if (keyCode==GLFW_KEY_F&&shift) { autoFormat(); return; }
-        if (keyCode==GLFW_KEY_EQUAL) { FS=std::min(32.0f,FS+1);FSS=FS-1;FST=FS-2; return; }
-        if (keyCode==GLFW_KEY_MINUS) { FS=std::max(8.0f,FS-1);FSS=FS-1;FST=FS-2; return; }
+        if (keyCode==GLFW_KEY_EQUAL) { FS=std::min(32.0f,FS+1); return; }
+        if (keyCode==GLFW_KEY_MINUS) { FS=std::max(8.0f,FS-1); return; }
         if (keyCode==GLFW_KEY_HOME) { curLine=0;curCol=0;scrollTop=0;clearSel(); return; }
         if (keyCode==GLFW_KEY_END)  { curLine=(int)code.size()-1;curCol=(int)code.back().size();clearSel();ensureVis(); return; }
     }

@@ -30,7 +30,7 @@ elif command -v pacman  &>/dev/null; then PLAT=arch;     info "Linux -- Arch (pa
 elif command -v apt-get &>/dev/null; then PLAT=debian;   info "Linux -- Debian/Ubuntu (apt)"
 elif command -v dnf     &>/dev/null; then PLAT=fedora;   info "Linux -- Fedora (dnf)"
 elif command -v zypper  &>/dev/null; then PLAT=opensuse; info "Linux -- openSUSE (zypper)"
-else die "Unknown distro. Install g++, libglfw, libGLEW, libGL manually then run: bash buildIde.sh"; fi
+else die "Unknown distro. Install g++, libglfw, libGLEW, libGL manually then run: bash buildIDE.sh"; fi
 
 # --- Install system packages -----------------------------------------------
 step "Installing dependencies"
@@ -173,7 +173,17 @@ for SAMPLE in Geometry.cpp Mixture.cpp Mandelbrot.cpp StoringInput.cpp; do
         cp "$SAMPLE" "files/$SAMPLE" && ok "Sample: $SAMPLE -> files/"
     fi
 done
-ok "Project folders ready (files/ lib/)"
+
+# Create examples/ folder and populate with sample sketches
+mkdir -p examples
+for SAMPLE in Geometry.cpp Mixture.cpp Mandelbrot.cpp StoringInput.cpp; do
+    if [ -f "$SAMPLE" ] && [ ! -f "examples/$SAMPLE" ]; then
+        cp "$SAMPLE" "examples/$SAMPLE" && ok "Example: $SAMPLE -> examples/"
+    elif [ -f "examples/$SAMPLE" ]; then
+        ok "examples/$SAMPLE already present"
+    fi
+done
+ok "Project folders ready (files/ lib/ examples/)"
 
 # --- src/main.cpp ----------------------------------------------------------
 if [ ! -f src/main.cpp ]; then
@@ -202,7 +212,7 @@ else
     LD="-lglfw -lGLEW -lGL -lGLU -lm -pthread"
 fi
 
-cat > buildIde.sh << BIDE
+cat > buildIDE.sh << BIDE
 #!/usr/bin/env bash
 set -e
 echo "[build] Compiling IDE..."
@@ -214,7 +224,7 @@ g++ -std=c++17 \\
     $LD
 echo "[build] Done: ./ProcessingGL"
 BIDE
-chmod +x buildIde.sh; ok "buildIde.sh"
+chmod +x buildIDE.sh; ok "buildIDE.sh"
 
 cat > build.sh << BUILD
 #!/usr/bin/env bash
@@ -251,7 +261,7 @@ done
 
 # --- Build IDE -------------------------------------------------------------
 step "Building IDE"
-bash buildIde.sh
+bash buildIDE.sh
 
 # --- Optional AppImage (Arch only) -----------------------------------------
 if [[ $PLAT == arch ]]; then

@@ -271,6 +271,20 @@ if not exist "files\vim_binds.txt" (
 
 echo [OK]  Project folders ready ^(files\ lib\^)
 
+:: Create examples\ folder and populate it
+if not exist "examples" mkdir examples
+
+for %%S in (Geometry.cpp Mixture.cpp Mandelbrot.cpp StoringInput.cpp) do (
+    if exist "%%S" if not exist "examples\%%S" (
+        copy "%%S" "examples\%%S" >nul
+        echo [OK]  Example: %%S -^> examples\
+    )
+    if exist "examples\%%S" if not exist "%%S" (
+        echo [OK]  examples\%%S present
+    )
+)
+echo [OK]  examples\ folder ready
+
 :: ---------------------------------------------------------------------------
 :: 11. Write build scripts
 :: ---------------------------------------------------------------------------
@@ -293,8 +307,8 @@ echo [INFO] Writing build scripts...
         -mwindows
     echo if %%ERRORLEVEL%% neq 0 ^( echo [ERR] Build failed. ^& pause ^& exit /b 1 ^)
     echo echo [build] Done: ProcessingGL.exe
-) > buildSimplepp.bat
-echo [OK]  buildSimplepp.bat
+) > buildIDE.bat
+echo [OK]  buildIDE.bat
 
 (
     echo @echo off
@@ -375,7 +389,7 @@ echo  +============================================+
 echo.
 echo   Run IDE:       double-click ProcessingGL.exe
 echo   Build sketch:  build.bat MySketch.cpp
-echo   Rebuild IDE:   buildSimplepp.bat
+echo   Rebuild IDE:   buildIDE.bat
 echo.
 pause
 :: Launch IDE

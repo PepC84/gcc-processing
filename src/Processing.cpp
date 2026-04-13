@@ -232,8 +232,31 @@ color lerpColor(color c1,color c2,float t){
 // INTERNAL HELPERS
 // =============================================================================
 
-static void applyFill()  {glColor4f(fillR,fillG,fillB,fillA);}
-static void applyStroke(){glColor4f(strokeR,strokeG,strokeB,strokeA);}
+static void applyFill() {
+    // Fill respects lighting -- glColor4f drives the material via GL_COLOR_MATERIAL
+    glColor4f(fillR, fillG, fillB, fillA);
+}
+
+// Temporarily suspend lighting so stroke lines/points render with their exact
+// colour. Processing Java does the same -- strokes are never affected by lights.
+static void applyStroke() {
+    if (lightsEnabled) {
+        glDisable(GL_LIGHTING);
+        glDisable(GL_COLOR_MATERIAL);
+    }
+    glColor4f(strokeR, strokeG, strokeB, strokeA);
+}
+
+// Restore lighting after a stroke draw call.
+static void restoreLighting() {
+    if (lightsEnabled) {
+        glEnable(GL_LIGHTING);
+        glEnable(GL_COLOR_MATERIAL);
+        glColorMaterial(GL_FRONT_AND_BACK, GL_DIFFUSE);
+        // Reapply fill colour so the next lit shape uses the right material
+        glColor4f(fillR, fillG, fillB, fillA);
+    }
+}
 
 static void setProjection(int,int){
     // Always query the actual framebuffer size from GLFW so the
@@ -400,9 +423,9 @@ void ellipseMode(int m) {currentEllipseMode=m;}
 // 2D PRIMITIVES
 // =============================================================================
 
-void point(float x,float y){if(!doStroke)return;applyStroke();glPointSize(strokeW);glBegin(GL_POINTS);glVertex2f(x,y);glEnd();}
-void line(float x1,float y1,float x2,float y2){if(!doStroke)return;applyStroke();glLineWidth(strokeW);glBegin(GL_LINES);glVertex2f(x1,y1);glVertex2f(x2,y2);glEnd();}
-void line(float x1,float y1,float z1,float x2,float y2,float z2){if(!doStroke)return;applyStroke();glLineWidth(strokeW);glBegin(GL_LINES);glVertex3f(x1,y1,z1);glVertex3f(x2,y2,z2);glEnd();}
+void point(float x,float y){if(!doStroke)return;applyStroke();glPointSize(strokeW);glBegin(GL_POINTS);glVertex2f(x,y);glEnd();restoreLighting();}
+void line(float x1,float y1,float x2,float y2){if(!doStroke)return;applyStroke();glLineWidth(strokeW);glBegin(GL_LINES);glVertex2f(x1,y1);glVertex2f(x2,y2);glEnd();restoreLighting();}
+void line(float x1,float y1,float z1,float x2,float y2,float z2){if(!doStroke)return;applyStroke();glLineWidth(strokeW);glBegin(GL_LINES);glVertex3f(x1,y1,z1);glVertex3f(x2,y2,z2);glEnd();restoreLighting();}
 void ellipse(float cx,float cy,float w,float h){float rx=w,ry=h;resolveEllipse(cx,cy,rx,ry);drawEllipseGeom(cx,cy,rx,ry);}
 void circle(float cx,float cy,float d){ellipse(cx,cy,d,d);}
 void arc(float cx,float cy,float w,float h,float s,float e){
@@ -415,7 +438,7 @@ void arc(float cx,float cy,float w,float h,float s,float e){
 void rect(float x,float y,float w,float h){
     resolveRect(x,y,w,h);
     if(doFill){applyFill();glBegin(GL_QUADS);glVertex2f(x,y);glVertex2f(x+w,y);glVertex2f(x+w,y+h);glVertex2f(x,y+h);glEnd();}
-    if(doStroke){applyStroke();glLineWidth(strokeW);glBegin(GL_LINE_LOOP);glVertex2f(x,y);glVertex2f(x+w,y);glVertex2f(x+w,y+h);glVertex2f(x,y+h);glEnd();}
+    if(doStroke){applyStroke();glLineWidth(strokeW);glBegin(GL_LINE_LOOP);glVertex2f(x,y);glVertex2f(x+w,y);glVertex2f(x+w,y+h);glVertex2f(x,y+h);glEnd();restoreLighting();}
 }
 void rect(float x,float y,float w,float h,float r){
     resolveRect(x,y,w,h);r=min(r,min(w,h)*0.5f);const int sg=8;
@@ -426,11 +449,11 @@ void rect(float x,float y,float w,float h,float r){
 void square(float x,float y,float s){rect(x,y,s,s);}
 void triangle(float x1,float y1,float x2,float y2,float x3,float y3){
     if(doFill){applyFill();glBegin(GL_TRIANGLES);glVertex2f(x1,y1);glVertex2f(x2,y2);glVertex2f(x3,y3);glEnd();}
-    if(doStroke){applyStroke();glLineWidth(strokeW);glBegin(GL_LINE_LOOP);glVertex2f(x1,y1);glVertex2f(x2,y2);glVertex2f(x3,y3);glEnd();}
+    if(doStroke){applyStroke();glLineWidth(strokeW);glBegin(GL_LINE_LOOP);glVertex2f(x1,y1);glVertex2f(x2,y2);glVertex2f(x3,y3);glEnd();restoreLighting();}
 }
 void quad(float x1,float y1,float x2,float y2,float x3,float y3,float x4,float y4){
     if(doFill){applyFill();glBegin(GL_QUADS);glVertex2f(x1,y1);glVertex2f(x2,y2);glVertex2f(x3,y3);glVertex2f(x4,y4);glEnd();}
-    if(doStroke){applyStroke();glLineWidth(strokeW);glBegin(GL_LINE_LOOP);glVertex2f(x1,y1);glVertex2f(x2,y2);glVertex2f(x3,y3);glVertex2f(x4,y4);glEnd();}
+    if(doStroke){applyStroke();glLineWidth(strokeW);glBegin(GL_LINE_LOOP);glVertex2f(x1,y1);glVertex2f(x2,y2);glVertex2f(x3,y3);glVertex2f(x4,y4);glEnd();restoreLighting();}
 }
 
 // =============================================================================
@@ -471,6 +494,7 @@ void box(float bw,float bh,float bd){
         glBegin(GL_LINES);
         for(auto& ee:e){glVertex3f(vx[ee[0]],vy[ee[0]],vz[ee[0]]);glVertex3f(vx[ee[1]],vy[ee[1]],vz[ee[1]]);}
         glEnd();
+        restoreLighting();
     }
 }
 void sphere(float r){
@@ -641,6 +665,7 @@ void endShape(int mode){
                     break;
             }
         }
+        restoreLighting();
         inShape=false; shape3D=false; shapeVerts.clear(); shapeVerts3D.clear();
         return;
     }
@@ -676,6 +701,7 @@ void endShape(int mode){
             // Use 3D coords so transforms (rotateX/Y) are respected
             for(auto& v : shapeVerts3D) glVertex3f(v[0], v[1], v[2]);
             glEnd();
+            restoreLighting();
         }
     }
     inShape=false; shapeVerts.clear(); shapeVerts3D.clear();
@@ -763,23 +789,18 @@ float modelZ(float x,float y,float z) {float mv[16];glGetFloatv(GL_MODELVIEW_MAT
 // =============================================================================
 // CAMERA
 // =============================================================================
+static void applyStandardModelview(); // forward declaration
 
 // Internal helper -- sets up the standard Processing Y-flipped perspective
 // camera. Called by camera() and perspective() so they stay in sync.
-static void applyDefaultCamera(){
-    float eyeZ = ((float)winHeight/2.0f) / std::tan(PI*60.0f/360.0f);
-    float near_ = eyeZ/10.0f, far_ = eyeZ*10.0f;
+static void applyDefaultCamera() {
+    float eyeZ  = ((float)winHeight / 2.0f) / std::tan(PI * 60.0f / 360.0f);
+    float near_ = eyeZ / 10.0f;
+    float far_  = eyeZ * 10.0f;
     glMatrixMode(GL_PROJECTION); glLoadIdentity();
-    gluPerspective(60.0, (double)winWidth/winHeight, near_, far_);
-    glScalef(1,-1,1);   // flip Y so Processing's Y-down coords work
-    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-    gluLookAt(winWidth/2.0, winHeight/2.0, eyeZ,
-              winWidth/2.0, winHeight/2.0, 0,
-              0, 1, 0);
-    glFrontFace(GL_CW);
-    glDisable(GL_CULL_FACE);
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
+    gluPerspective(60.0, (double)winWidth / winHeight, near_, far_);
+    glScalef(1, -1, 1);   // flip Y so Processing Y-down screen coords work
+    applyStandardModelview();
 }
 
 void camera(){
@@ -804,13 +825,17 @@ void endCamera()  {glPopMatrix();}
 void perspective(){
     applyDefaultCamera();
 }
-void perspective(float fov,float aspect,float zNear,float zFar){
-    // User-supplied perspective -- apply Y-flip so coords stay consistent
+void perspective(float fov, float aspect, float zNear, float zFar) {
     glMatrixMode(GL_PROJECTION); glLoadIdentity();
     gluPerspective(degrees(fov), aspect, zNear, zFar);
-    glScalef(1,-1,1);
-    // Re-apply the default modelview camera so translate/rotate work correctly
-    float eyeZ = ((float)winHeight/2.0f) / std::tan(PI*60.0f/360.0f);
+    glScalef(1, -1, 1);   // Y-flip so Processing Y-down coords work
+    applyStandardModelview();
+}
+// Helper shared by ortho() and perspective() -- sets up the standard
+// Processing modelview camera (eye at eyeZ looking at canvas centre,
+// Y-down screen coordinates) and enables depth test.
+static void applyStandardModelview() {
+    float eyeZ = ((float)winHeight / 2.0f) / std::tan(PI * 60.0f / 360.0f);
     glMatrixMode(GL_MODELVIEW); glLoadIdentity();
     gluLookAt(winWidth/2.0, winHeight/2.0, eyeZ,
               winWidth/2.0, winHeight/2.0, 0,
@@ -820,20 +845,42 @@ void perspective(float fov,float aspect,float zNear,float zFar){
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
 }
-void ortho(){
-    glMatrixMode(GL_PROJECTION);glLoadIdentity();
-    glOrtho(0,winWidth,winHeight,0,-winHeight,winHeight);
-    glMatrixMode(GL_MODELVIEW);
+
+void ortho() {
+    // Default ortho: 1:1 pixel mapping, origin at top-left, Y increases downward.
+    // glOrtho(l, r, bottom, top, near, far):
+    //   bottom = winHeight (screen bottom = large Y in Processing)
+    //   top    = 0         (screen top    = Y=0 in Processing)
+    // gluLookAt is NOT used here -- we want raw screen-space coordinates,
+    // so we use a simple identity modelview with Y-flipped glOrtho.
+    glMatrixMode(GL_PROJECTION); glLoadIdentity();
+    glOrtho(0, winWidth, winHeight, 0, -winHeight, winHeight);
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    glFrontFace(GL_CW);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
 }
-void ortho(float l,float r,float b,float t,float n,float f){
-    glMatrixMode(GL_PROJECTION);glLoadIdentity();
-    glOrtho(l,r,b,t,n,f);
-    glMatrixMode(GL_MODELVIEW);
+
+void ortho(float l, float r, float b, float t, float n, float f) {
+    // Processing Java passes ortho(-w/2, w/2, -h/2, h/2, near, far).
+    // The modelview camera (gluLookAt Y-up view space) already maps:
+    //   view +Y = up on screen (= decreasing screen Y in Processing coords)
+    //   view -Y = down on screen (= increasing screen Y in Processing coords)
+    // glOrtho(l, r, bottom, top) maps bottom->screen-bottom, top->screen-top.
+    // Passing b=-h/2 as bottom and t=h/2 as top is correct as-is:
+    //   b=-h/2 maps to screen bottom (Y = height in screen pixels)
+    //   t=+h/2 maps to screen top    (Y = 0 in screen pixels)
+    // No swap, no Y-scale needed -- the gluLookAt already handles the convention.
+    glMatrixMode(GL_PROJECTION); glLoadIdentity();
+    glOrtho(l, r, b, t, n, f);
+    applyStandardModelview();
 }
-void frustum(float l,float r,float b,float t,float n,float f){
-    glMatrixMode(GL_PROJECTION);glLoadIdentity();
-    glFrustum(l,r,b,t,n,f);
-    glMatrixMode(GL_MODELVIEW);
+
+void frustum(float l, float r, float b, float t, float n, float f) {
+    glMatrixMode(GL_PROJECTION); glLoadIdentity();
+    glFrustum(l, r, b, t, n, f);
+    applyStandardModelview();
 }
 void printCamera(){float m[16];glGetFloatv(GL_MODELVIEW_MATRIX,m);std::cout<<"Camera matrix:\n";for(int i=0;i<4;i++){for(int j=0;j<4;j++)std::cout<<m[j*4+i]<<" ";std::cout<<"\n";}}
 void printProjection(){float m[16];glGetFloatv(GL_PROJECTION_MATRIX,m);std::cout<<"Projection matrix:\n";for(int i=0;i<4;i++){for(int j=0;j<4;j++)std::cout<<m[j*4+i]<<" ";std::cout<<"\n";}}

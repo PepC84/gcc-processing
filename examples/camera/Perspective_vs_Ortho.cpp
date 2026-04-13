@@ -1,36 +1,40 @@
-#include "Processing.h"
+/**
+ * Perspective vs. Ortho
+ *
+ * Move the mouse left to right to change the "far" 
+ * parameter for the perspective() and ortho() functions.
+ * This parameter sets the maximum distance from the 
+ * origin away from the viewer and will clip the geometry.
+ * Click a mouse button to switch between the perspective and
+ * orthographic projections.
+ */
 
 
 bool showPerspective = false;
 
 void setup() {
-  size(600, 360, P3D);  // make sure this enables 3D in your engine
+  size(600, 360, P3D);
   noFill();
   fill(255);
   noStroke();
 }
 
 void draw() {
-  background(0);
   lights();
-
-  float farVal = map(mouseX, 0, width, 120, 400);
-
-  if (showPerspective) {
-    perspective(PI / 3.0f, (float)width / (float)height, 10.0f, farVal);
+  background(0);
+  float far = map(mouseX, 0, width, 120, 400);
+  if (showPerspective == true) {
+    perspective(PI/3.0, float(width)/float(height), 10, far);
   } else {
-    ortho(-width / 2.0f, width / 2.0f,
-          -height / 2.0f, height / 2.0f,
-          10.0f, farVal);
+    ortho(-width/2.0, width/2.0, -height/2.0, height/2.0, 10, far);
   }
-
-  translate(width / 2.0f, height / 2.0f, 0);
-  rotateX(-PI / 6.0f);
-  rotateY(PI / 3.0f);
-
+  translate(width/2, height/2, 0);
+  rotateX(-PI/6);
+  rotateY(PI/3);
   box(180);
 }
 
 void mousePressed() {
   showPerspective = !showPerspective;
 }
+
