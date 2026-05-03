@@ -154,6 +154,26 @@ static void populateTree() {
 // EDITOR STATE
 // =============================================================================
 
+// Forward declarations of IDE event callbacks (defined later in this file)
+static void _fwd_keyPressed();
+static void _fwd_keyTyped();
+static void _fwd_mousePressed();
+static void _fwd_mouseDragged();
+static void _fwd_mouseReleased();
+static void _fwd_mouseWheel(int);
+
+// IDE event wiring -- called once before the main loop starts
+static void ideWireCallbacks() {
+    _onKeyPressed    = _fwd_keyPressed;
+    _onKeyTyped      = _fwd_keyTyped;
+    _onMousePressed  = _fwd_mousePressed;
+    _onMouseDragged  = _fwd_mouseDragged;
+    _onMouseReleased = _fwd_mouseReleased;
+    _onMouseWheel    = _fwd_mouseWheel;
+    // keyReleased, mouseClicked, mouseMoved, windowMoved, windowResized
+    // not implemented by IDE -- _on* pointers stay nullptr
+}
+
 static std::vector<std::string> code = {
     "// run once",
     "",
@@ -748,6 +768,26 @@ static std::string javaToC(const std::string& line) {
     }
 
 
+    // Rename Windows-reserved identifiers that conflict with WinAPI macros.
+    // e.g. `float far = ...` fails because <windows.h> defines `far` as empty macro.
+    {
+        auto renameReserved = [](std::string& s, const std::string& word, const std::string& repl) {
+            std::string r; size_t i=0, wl=word.size();
+            while (i<=s.size()) {
+                if (i+wl<=s.size() && s.substr(i,wl)==word) {
+                    bool prevOk=(i==0)||(!isalnum((unsigned char)s[i-1])&&s[i-1]!='_');
+                    bool nextOk=(i+wl>=s.size())||(!isalnum((unsigned char)s[i+wl])&&s[i+wl]!='_');
+                    if (prevOk && nextOk) { r+=repl; i+=wl; continue; }
+                }
+                if (i<s.size()) r+=s[i]; i++;
+            }
+            s=r;
+        };
+        // Windows macros that break variable names
+        renameReserved(out, "far",   "farVal");
+        renameReserved(out, "near",  "nearVal");
+    }
+
     // Java/Processing hex color literals: #RRGGBB or #AARRGGBB -> color(0xFFRRGGBB)
     {
         std::string result;
@@ -850,6 +890,31 @@ static bool writeSketch() {
         for (auto& l : code) f << sanitizeLine(l) << "\n";
     }
 
+    // Generate wireCallbacks() -- assigns only the callbacks the sketch defines.
+    // This is the cross-platform solution: no weak symbols, no undefined refs.
+    // Note: we are ALREADY inside namespace Processing { ... } -- no extra wrapper.
+    f << "\nstatic void _sketchWire() {\n";
+    // Scan code to see which callbacks the sketch defines
+    auto hasFn = [&](const std::string& sig) {
+        for (auto& l : code)
+            if (l.find(sig) != std::string::npos) return true;
+        return false;
+    };
+    if (hasFn("void keyPressed("))   f << "    _onKeyPressed   = keyPressed;\n";
+    if (hasFn("void keyReleased("))  f << "    _onKeyReleased  = keyReleased;\n";
+    if (hasFn("void keyTyped("))     f << "    _onKeyTyped     = keyTyped;\n";
+    if (hasFn("void mousePressed(")) f << "    _onMousePressed = mousePressed;\n";
+    if (hasFn("void mouseReleased("))f << "    _onMouseReleased= mouseReleased;\n";
+    if (hasFn("void mouseClicked(")) f << "    _onMouseClicked = mouseClicked;\n";
+    if (hasFn("void mouseMoved("))   f << "    _onMouseMoved   = mouseMoved;\n";
+    if (hasFn("void mouseDragged(")) f << "    _onMouseDragged = mouseDragged;\n";
+    if (hasFn("void mouseWheel("))   f << "    _onMouseWheel   = mouseWheel;\n";
+    if (hasFn("void windowMoved("))  f << "    _onWindowMoved  = windowMoved;\n";
+    if (hasFn("void windowResized("))f << "    _onWindowResized= windowResized;\n";
+    f << "}\n";
+    // Wire up via a global initializer (runs before main)
+    f << "static int _autoWire = []{ _wireCallbacksFn = _sketchWire; return 0; }();\n";
+
     f << "} // namespace Processing\n";
     return true;
 }
@@ -942,7 +1007,9 @@ static void buildWorker(const std::string& cmd, const std::string& outBin) {
     buildProgress.store(0.05f); // show some immediate progress
 
 #ifdef _WIN32
-    FILE* pipe = _popen(cmd.c_str(), "r");
+    // Use plat_popen so no black console window flashes during compilation
+    auto pp = plat_popen(cmd);
+    FILE* pipe = pp.f;
 #else
     FILE* pipe = popen(cmd.c_str(), "r");
 #endif
@@ -978,10 +1045,11 @@ static void buildWorker(const std::string& cmd, const std::string& outBin) {
     }
 
 #ifdef _WIN32
-    _pclose(pipe);
+    int buildRet = plat_pclose(pp);
 #else
-    pclose(pipe);
+    int buildRet = pclose(pipe);
 #endif
+    (void)buildRet;
 
     buildProgress.store(0.95f);
 
@@ -1050,7 +1118,10 @@ static void doCompile(bool thenRun=false) {
         " src/main.cpp"
         " -o \"" + outBin + "\"" +
         " " + buildFlags +
-        " 2>&1";
+#ifndef _WIN32
+        " 2>&1" +  // on Linux/Mac: merge stderr into stdout for popen()
+#endif
+        "";
 
     outLines.push_back("Building: " + sketchBin);
     outLines.push_back("$ " + cmd);
@@ -1157,7 +1228,7 @@ static const std::vector<std::string> KEYWORDS = {
     "pushMatrix","popMatrix","push","pop",
     "beginShape","endShape","vertex","bezierVertex","curveVertex",
     "width","height","mouseX","mouseY","pmouseX","pmouseY",
-    "isMousePressed","isKeyPressed","mouseButton","keyCode",
+    "_mousePressed","_keyPressed","mouseButton","keyCode",
     "frameCount","frameRate","millis","second","minute","hour",
     "day","month","year","PI","TWO_PI","HALF_PI","QUARTER_PI",
     "map","constrain","lerp","norm","sqrt","sq","abs","pow",
@@ -1946,11 +2017,20 @@ static void exportWorker(std::string sketchDir, std::string sketchName,
             " src/Processing_defaults.cpp"
             " src/main.cpp"
             " -o \"" + binPath + "\""
-            " " + flags + " 2>&1";
+            " " + flags +
+#ifndef _WIN32
+        " 2>&1" +
+#endif
+        "";
         log("[Export] Compiling for " + platName + "...");
         log("$ " + cmd);
 
+#ifdef _WIN32
+        auto _ep = plat_popen(cmd);
+        FILE* p = _ep.f;
+#else
         FILE* p = popen(cmd.c_str(), "r");
+#endif
         if (!p) { log("[Export] ERROR: could not run compiler"); return; }
         char buf[1024];
         while (fgets(buf, sizeof(buf), p)) {
@@ -1958,7 +2038,11 @@ static void exportWorker(std::string sketchDir, std::string sketchName,
             if (!ln.empty() && ln.back()=='\n') ln.pop_back();
             log(ln);
         }
+#ifdef _WIN32
+        int ret = plat_pclose(_ep);
+#else
         int ret = pclose(p);
+#endif
         if (ret != 0) { log("[Export] ERROR: compile failed for " + platName); return; }
 
         // Copy runtime DLLs / .so files from system lib paths
@@ -2089,6 +2173,7 @@ static void drawExportDlg() {
 }
 
 void setup() {
+    _wireCallbacksFn = ideWireCallbacks;  // register IDE callbacks before run() wires them
     size(1080, 740);
     windowResizable(true);
     frameRate(60);
@@ -2202,6 +2287,20 @@ void draw() {
 static bool   dragging      = false;
 static int    clickCount    = 0;
 static double lastClickTime = 0.0;
+
+static void autoFormat() {
+    pushUndo();
+    int depth=0;
+    for (auto& ln:code) {
+        std::string t=ln;
+        size_t sp=t.find_first_not_of(" \t");
+        if (sp!=std::string::npos) t=t.substr(sp);
+        if (!t.empty()&&t[0]=='}') depth=std::max(0,depth-1);
+        ln=std::string(depth*2,' ')+t;
+        for (char c:t) { if(c=='{')depth++;else if(c=='}')depth--; }
+        depth=std::max(0,depth);
+    }
+}
 
 static void mouseToLC(int& li, int& col) {
     float lh = lineH();
@@ -2361,9 +2460,17 @@ void mousePressed() {
                 else if (lbl=="Export Application...") doExportApp();
                 else if (lbl=="Examples")           { refreshExamples(); showExamples=!showExamples; }
                 
-                else if (lbl=="Auto Format")        {} // handled in keyPressed
-                else if (lbl=="Increase Font")      {FS=std::min(32.0f,FS+1);}
-                else if (lbl=="Decrease Font")      {FS=std::max(8.0f,FS-1);}
+                else if (lbl=="Undo")         { if(!undoStack.empty()){auto&u=undoStack.back();redoStack.push_back({code,{curLine,curCol}});code=u.first;curLine=u.second.first;curCol=u.second.second;undoStack.pop_back();clearSel();clamp();ensureVis();} }
+                else if (lbl=="Redo")         { if(!redoStack.empty()){auto&u=redoStack.back();undoStack.push_back({code,{curLine,curCol}});code=u.first;curLine=u.second.first;curCol=u.second.second;redoStack.pop_back();clearSel();clamp();ensureVis();} }
+                else if (lbl=="Cut")          { pushUndo();setClip(getSelected());deleteSel(); }
+                else if (lbl=="Copy")         { setClip(getSelected()); }
+                else if (lbl=="Paste")        { std::string cb=getClipboard();if(!cb.empty()){pushUndo();if(hasSel())deleteSel();std::istringstream ss(cb);std::string ln;bool first=true;while(std::getline(ss,ln)){if(!first){code.insert(code.begin()+curLine+1,code[curLine].substr(curCol));code[curLine]=code[curLine].substr(0,curCol);curLine++;curCol=0;}code[curLine].insert(curCol,ln);curCol+=(int)ln.size();first=false;}clamp();ensureVis();} }
+                else if (lbl=="Select All")   { selLine=0;selCol=0;curLine=(int)code.size()-1;curCol=(int)code.back().size(); }
+                else if (lbl=="Duplicate Line"){ pushUndo();code.insert(code.begin()+curLine+1,code[curLine]);curLine++;clamp();ensureVis(); }
+                else if (lbl=="Toggle Comment"){ pushUndo();auto&ln=code[curLine];if(ln.size()>=2&&ln[0]=='/'&&ln[1]=='/')ln.erase(0,2);else ln="//"+ln; }
+                else if (lbl=="Auto Format")   { autoFormat(); }
+                else if (lbl=="Increase Font") {FS=std::min(32.0f,FS+1);}
+                else if (lbl=="Decrease Font") {FS=std::max(8.0f,FS-1);}
                 else if (lbl=="Manage Libraries..."){showLibMgr=true;checkInstalled();}
                 return;
             }
@@ -2496,7 +2603,19 @@ void mouseDragged() {
         return;
     }
     if (!dragging) return;
-    if (mouseY>=editorY()&&mouseY<editorY()+editorH()) {
+    // Always update selection when dragging in editor area,
+    // and auto-scroll if mouse goes above or below the visible area.
+    if (mouseY < editorY()) {
+        // Above editor -- scroll up and extend selection to top of visible
+        if (scrollTop > 0) scrollTop--;
+        curLine = scrollTop; curCol = 0; clamp();
+    } else if (mouseY >= editorY()+editorH()) {
+        // Below editor -- scroll down and extend selection
+        int maxScroll = std::max(0,(int)code.size()-visLines());
+        if (scrollTop < maxScroll) scrollTop++;
+        curLine = std::min(scrollTop+visLines()-1,(int)code.size()-1);
+        curCol = (int)code[curLine].size(); clamp();
+    } else if (mouseY>=editorY()) {
         int li, col; mouseToLC(li, col);
         curLine=li; curCol=col; clamp(); ensureVis();
     }
@@ -2536,20 +2655,6 @@ void mouseWheel(int delta) {
 // KEYBOARD
 // =============================================================================
 
-static void autoFormat() {
-    pushUndo();
-    int depth=0;
-    for (auto& ln:code) {
-        std::string t=ln;
-        size_t sp=t.find_first_not_of(" \t");
-        if (sp!=std::string::npos) t=t.substr(sp);
-        if (!t.empty()&&t[0]=='}') depth=std::max(0,depth-1);
-        ln=std::string(depth*2,' ')+t;
-        for (char c:t) { if(c=='{')depth++;else if(c=='}')depth--; }
-        depth=std::max(0,depth);
-    }
-}
-
 void keyPressed() {
     bool ctrl = isCtrlDown(), shift = isShiftDown();
 
@@ -2587,7 +2692,17 @@ void keyPressed() {
         if (keyCode==KEY_Z&&!shift) { if(!undoStack.empty()){auto&u=undoStack.back();redoStack.push_back({code,{curLine,curCol}});code=u.first;curLine=u.second.first;curCol=u.second.second;undoStack.pop_back();clearSel();clamp();ensureVis();} return; }
         if (keyCode==KEY_Y||(keyCode==KEY_Z&&shift)) { if(!redoStack.empty()){auto&u=redoStack.back();undoStack.push_back({code,{curLine,curCol}});code=u.first;curLine=u.second.first;curCol=u.second.second;redoStack.pop_back();clearSel();clamp();ensureVis();} return; }
         if (keyCode==KEY_A) { selLine=0;selCol=0;curLine=(int)code.size()-1;curCol=(int)code.back().size(); return; }
-        if (keyCode==KEY_C) { setClip(getSelected()); return; }
+        if (keyCode==KEY_C) {
+            std::string sel = getSelected();
+            if (sel.empty() && curLine < (int)code.size()) {
+                // No selection: copy the whole current line (like most modern editors)
+                plat_set_clipboard(code[curLine] + "\n");
+                setClipboard(code[curLine] + "\n");
+            } else {
+                setClip(sel);
+            }
+            return;
+        }
         if (keyCode==KEY_X) { pushUndo();setClip(getSelected());deleteSel(); return; }
         if (keyCode==KEY_V) {
             std::string cbStr=getClipboard(); const char* cb=cbStr.empty()?nullptr:cbStr.c_str();
@@ -2664,5 +2779,13 @@ void keyTyped() {
         curCol++; clamp(); ensureVis();
     }
 }
+
+// Forwarder bodies -- after all IDE callbacks are defined
+static void _fwd_keyPressed()      { keyPressed(); }
+static void _fwd_keyTyped()        { keyTyped(); }
+static void _fwd_mousePressed()    { mousePressed(); }
+static void _fwd_mouseDragged()    { mouseDragged(); }
+static void _fwd_mouseReleased()   { mouseReleased(); }
+static void _fwd_mouseWheel(int d) { mouseWheel(d); }
 
 } // namespace Processing

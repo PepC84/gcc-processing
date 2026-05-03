@@ -474,7 +474,7 @@ static inline int& height = winHeight;
 
 extern float mouseX, mouseY;   // current mouse position (screen coords)
 extern float pmouseX, pmouseY; // previous frame mouse position
-extern bool  isMousePressed; // true while any mouse button is held (Processing Java: "mousePressed")
+extern bool  _mousePressed; // true while any mouse button is held
 extern int   mouseButton;      // LEFT, RIGHT, or CENTER
 
 // =============================================================================
@@ -487,21 +487,11 @@ extern int   mouseButton;      // LEFT, RIGHT, or CENTER
 //   set at the bottom of IDE.cpp/sketch to point to a function that wires
 //   all _on* function pointers.  See the Windows Event Wiring section of IDE.cpp.
 
-#if defined(__GNUC__) && !defined(_WIN32)
-// Linux / macOS: the linker resolves undefined weak symbols to nullptr.
-// Processing.cpp's run() checks each for nullptr before calling.
-void keyPressed()          __attribute__((weak));
-void keyReleased()         __attribute__((weak));
-void keyTyped()            __attribute__((weak));
-void mousePressed()        __attribute__((weak));
-void mouseReleased()       __attribute__((weak));
-void mouseClicked()        __attribute__((weak));
-void mouseMoved()          __attribute__((weak));
-void mouseDragged()        __attribute__((weak));
-void mouseWheel(int delta) __attribute__((weak));
-void windowMoved()         __attribute__((weak));
-void windowResized()       __attribute__((weak));
-#endif
+// ---------------------------------------------------------------------------
+// Processing event callbacks -- define whichever ones your sketch needs.
+// Processing.cpp uses _on* function pointers; wireCallbacks() in
+// Sketch_run.cpp assigns only the ones the sketch defines.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Internal event function pointers (set by run() via the callbacks above).
@@ -526,15 +516,13 @@ extern std::function<void()>    _onWindowResized;
 // to it from a static initializer in another translation unit is always safe.
 // Processing::run() calls it (if non-null) after setup() to wire all _on* ptrs.
 // ---------------------------------------------------------------------------
-#ifdef _WIN32
-extern void (*_wireCallbacksFn)();
-#endif
+extern void (*_wireCallbacksFn)(); // set before run() to wire event callbacks
 
 // =============================================================================
 // KEYBOARD STATE
 // =============================================================================
 
-extern bool  isKeyPressed;   // true while any key is held (Processing Java: "keyPressed")
+extern bool  _keyPressed;   // true while any key is held
 extern int  keyCode; // special key code (UP, DOWN, LEFT, RIGHT, ALT, CONTROL, SHIFT, etc.)
 extern char key;     // ASCII character, or CODED (0xFF) for special keys
 
@@ -816,7 +804,8 @@ struct color {
     color(float r, float g, float b);
     color(float r, float g, float b, float a);
 
-    operator unsigned int() const { return value; }
+    explicit operator unsigned int() const { return value; }
+    unsigned int toInt() const { return value; }
     bool operator==(const color& o) const { return value == o.value; }
     bool operator!=(const color& o) const { return value != o.value; }
 };

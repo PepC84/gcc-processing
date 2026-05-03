@@ -42,6 +42,11 @@ void setup() {
     fill(middle);
     rect(60, 90, 80, 80);
     popMatrix();
+    noLoop();
 }
 void draw() {}
+
+static void _sketchWire() {
+}
+static int _autoWire = []{ _wireCallbacksFn = _sketchWire; return 0; }();
 } // namespace Processing

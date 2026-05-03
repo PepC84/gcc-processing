@@ -250,7 +250,12 @@ inline plat_proc_t plat_proc_start(const std::string& exePath) {
     PROCESS_INFORMATION pi = {};
 
     std::string cmd = exePath;
-    if (!CreateProcessA(NULL, cmd.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+    // CREATE_NO_WINDOW: suppresses the black console window that flashes
+    //   briefly when the sketch subprocess starts on Windows.
+    // CREATE_NEW_PROCESS_GROUP: gives the child its own input queue so it
+    //   receives keyboard/mouse events independently from the IDE.
+    DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+    if (!CreateProcessA(NULL, cmd.data(), NULL, NULL, TRUE, flags, NULL, NULL, &si, &pi)) {
         CloseHandle(hRead); CloseHandle(hWrite); return {};
     }
     CloseHandle(hWrite);      // parent never writes to the pipe
@@ -342,6 +347,57 @@ inline void plat_set_clipboard(const std::string& text) {
     if (dst) { MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, dst, wlen); GlobalUnlock(hMem); }
     SetClipboardData(CF_UNICODETEXT, hMem);
     CloseClipboard();
+}
+
+
+// --------------------------------------------------------------------------
+// plat_popen / plat_pclose -- like popen/pclose but with CREATE_NO_WINDOW
+// so no black console flashes when running g++ or other subprocesses.
+// --------------------------------------------------------------------------
+struct Plat_Pipe { FILE* f; HANDLE proc; };
+
+inline Plat_Pipe plat_popen(const std::string& cmd) {
+    HANDLE hRead, hWrite;
+    SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, TRUE};
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) return {nullptr, NULL};
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si = {};
+    si.cb         = sizeof(si);
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdOutput = hWrite;
+    si.hStdError  = hWrite;
+    si.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
+
+    PROCESS_INFORMATION pi = {};
+    std::string mut = cmd;  // CreateProcessA needs mutable buffer
+    DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+    if (!CreateProcessA(NULL, mut.data(), NULL, NULL, TRUE, flags,
+                        NULL, NULL, &si, &pi)) {
+        CloseHandle(hRead); CloseHandle(hWrite);
+        return {nullptr, NULL};
+    }
+    CloseHandle(hWrite);    // parent never writes
+    CloseHandle(pi.hThread);
+
+    // Wrap the read handle in a FILE* for fgets() compatibility
+    int fd = _open_osfhandle((intptr_t)hRead, 0);
+    FILE* f = (fd >= 0) ? _fdopen(fd, "r") : nullptr;
+    return {f, pi.hProcess};
+}
+
+inline int plat_pclose(Plat_Pipe& pp) {
+    int ret = 0;
+    if (pp.f) fclose(pp.f);
+    if (pp.proc) {
+        WaitForSingleObject(pp.proc, INFINITE);
+        DWORD ec = 0;
+        GetExitCodeProcess(pp.proc, &ec);
+        CloseHandle(pp.proc);
+        ret = (int)ec;
+    }
+    pp = {nullptr, NULL};
+    return ret;
 }
 
 

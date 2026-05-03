@@ -37,16 +37,16 @@ namespace Processing {
 // STATE
 // =============================================================================
 
-int   winWidth=100,winHeight=100;
+int   winWidth=640,winHeight=480; // sensible default; size() overrides this
 int   displayWidth=0,displayHeight=0;
 int   pixelWidth=0,pixelHeight=0;
 int   pixelDensityValue=1;
 bool  isResizable=false,focused=false;
 
 float mouseX=0,mouseY=0,pmouseX=0,pmouseY=0;
-bool  isMousePressed=false;
+bool  _mousePressed=false;
 int   mouseButton=-1;
-bool  isKeyPressed=false;
+bool  _keyPressed=false;
 int   keyCode=0;
 char  key=0;
 
@@ -265,6 +265,10 @@ static void setProjection(int,int){
     glMatrixMode(GL_PROJECTION);glLoadIdentity();
     glOrtho(0, winWidth, winHeight, 0, -1, 1);
     glMatrixMode(GL_MODELVIEW);glLoadIdentity();
+    // In 2D mode, disable depth testing so overlapping shapes draw correctly.
+    // Without this, rect() calls at z=0 fail GL_LESS depth test against each other.
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_LIGHTING);
 }
 
 static void drawEllipseGeom(float cx,float cy,float rx,float ry,
@@ -325,27 +329,33 @@ static void setStrokeFromColor(color c){unsigned int v=c.value;strokeR=(v>>16&0x
 
 static bool defaultP3D = false;
 
-static bool _sizeOnlyMode = false; // true during pre-pass to capture size()
-
 void size(int w,int h){
     winWidth=w;winHeight=h;
     pixelWidth=w;pixelHeight=h;
-    if(_sizeOnlyMode) return; // pre-pass: just capture dimensions
     if(gWindow){
         glfwSetWindowSize(gWindow,w,h);
         // Poll until the framebuffer is actually the requested size.
         // glfwSetWindowSize is async; without this the window stays 100x100
         // when setup() calls background() or draws anything.
-        for(int _wait=0; _wait<200; _wait++){
+        // Poll until the window is actually resized (or timeout after 500ms)
+        for(int _wait=0; _wait<500; _wait++){
             glfwPollEvents();
             int fw=0,fh=0;
             glfwGetFramebufferSize(gWindow,&fw,&fh);
-            if(fw==w && fh==h){ pixelWidth=fw; pixelHeight=fh; break; }
-            if(_wait>10){
-                // On HiDPI fw/fh may be scaled -- accept if close enough
-                if(fw>0&&fh>0){ pixelWidth=fw; pixelHeight=fh; break; }
+            // Accept exact match or close match (HiDPI scaling)
+            if(fw>0 && fh>0){
+                pixelWidth=fw; pixelHeight=fh;
+                // Check if the logical window size matches what we requested
+                int lw=0,lh=0;
+                glfwGetWindowSize(gWindow,&lw,&lh);
+                if(lw==w && lh==h) break;  // exact match
             }
-            // Sleep 1ms between polls
+            if(_wait>=50){ // after 50ms, accept whatever we have
+                int fw2=0,fh2=0;
+                glfwGetFramebufferSize(gWindow,&fw2,&fh2);
+                if(fw2>0&&fh2>0){ pixelWidth=fw2; pixelHeight=fh2; }
+                break;
+            }
             #ifdef _WIN32
             Sleep(1);
             #else
@@ -353,11 +363,8 @@ void size(int w,int h){
             #endif
         }
         setProjection(w,h);
-        // Clear both front and back buffers at the new size
-        glClearColor(0,0,0,1);
-        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-        glfwSwapBuffers(gWindow);
-        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        // Just set up the projection -- don't clear buffers here.
+        // The sketch's background() call clears when needed.
     }
 }
 void size(int w,int h,int renderer){
@@ -415,17 +422,23 @@ void setWindowIcon(PImage* img) {
 // ---------------------------------------------------------------------------
 // Modifier key state
 // ---------------------------------------------------------------------------
+static int g_currentMods = 0; // GLFW modifier bitmask, set in key/mouse callbacks
+
 bool isCtrlDown() {
+    // Use GLFW mods bitmask (reliable from callbacks) OR glfwGetKey (for polling)
+    if (g_currentMods & GLFW_MOD_CONTROL) return true;
     if (!gWindow) return false;
     return glfwGetKey(gWindow, GLFW_KEY_LEFT_CONTROL)  == GLFW_PRESS
         || glfwGetKey(gWindow, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
 }
 bool isShiftDown() {
+    if (g_currentMods & GLFW_MOD_SHIFT) return true;
     if (!gWindow) return false;
     return glfwGetKey(gWindow, GLFW_KEY_LEFT_SHIFT)  == GLFW_PRESS
         || glfwGetKey(gWindow, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
 }
 bool isAltDown() {
+    if (g_currentMods & GLFW_MOD_ALT) return true;
     if (!gWindow) return false;
     return glfwGetKey(gWindow, GLFW_KEY_LEFT_ALT)  == GLFW_PRESS
         || glfwGetKey(gWindow, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
@@ -1514,16 +1527,16 @@ static bool mouseWasPressed=false;
 static void cursor_pos_cb(GLFWwindow*,double x,double y){
     pmouseX=mouseX;pmouseY=mouseY;
     mouseX=(float)x;mouseY=(float)y;
-    if(isMousePressed){if(_onMouseDragged)_onMouseDragged();}
+    if(_mousePressed){if(_onMouseDragged)_onMouseDragged();}
     else             {if(_onMouseMoved)  _onMouseMoved();}
 }
-static void mouse_btn_cb(GLFWwindow*,int btn,int action,int){
+static void mouse_btn_cb(GLFWwindow*,int btn,int action,int mods){g_currentMods=mods;
     if(action==GLFW_PRESS){
-        isMousePressed=true;mouseButton=(btn==GLFW_MOUSE_BUTTON_LEFT)?LEFT:(btn==GLFW_MOUSE_BUTTON_RIGHT)?RIGHT:CENTER; // LEFT=37,RIGHT=39,CENTER=3
+        _mousePressed=true;mouseButton=(btn==GLFW_MOUSE_BUTTON_LEFT)?LEFT:(btn==GLFW_MOUSE_BUTTON_RIGHT)?RIGHT:CENTER; // LEFT=37,RIGHT=39,CENTER=3
         if(_onMousePressed)_onMousePressed();
         mouseWasPressed=true;
     } else if(action==GLFW_RELEASE){
-        isMousePressed=false;
+        _mousePressed=false;
         if(_onMouseReleased)_onMouseReleased();
         if(mouseWasPressed&&_onMouseClicked)_onMouseClicked();
         mouseWasPressed=false;mouseButton=-1;
@@ -1534,14 +1547,21 @@ static void scroll_cb(GLFWwindow*,double,double yoffset){
 }
 static char g_lastChar = 0;  // set by char_cb, consumed by key_cb
 
+static bool g_pendingKeyPressed = false; // key_cb deferred to after char_cb
+
 static void char_cb(GLFWwindow*, unsigned int codepoint) {
-    // GLFW char callback delivers the correct Unicode character
-    // with shift, caps lock, and keyboard layout all applied.
-    // We store it so key_cb can pick it up, and also fire keyTyped.
+    // char_cb fires after key_cb for printable keys, with the correct
+    // Unicode character (shift/caps/layout all applied).
     if (codepoint < 128) {
         key = (char)codepoint;
-        g_lastChar = key;
     }
+    // Fire deferred keyPressed() now that key has the correct char value
+    if (g_pendingKeyPressed) {
+        g_pendingKeyPressed = false;
+        if (_onKeyPressed) _onKeyPressed();
+    }
+    // keyTyped() -- Processing standard: only printable chars, no action keys
+    // Action keys (Ctrl, Shift, Alt, etc.) never reach char_cb, so this is correct.
     if (_onKeyTyped) _onKeyTyped();
 }
 
@@ -1591,9 +1611,12 @@ static int glfw_to_java_keycode(int k) {
     }
 }
 
-static void key_cb(GLFWwindow* w, int k, int /*scancode*/, int action, int /*mods*/) {
+// Current modifier state -- set from key_cb mods parameter (reliable on Windows)
+static void key_cb(GLFWwindow* w, int k, int /*scancode*/, int action, int mods) {
+    g_currentMods = mods; // capture before callbacks fire
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        isKeyPressed = true;
+        _keyPressed = true;
+        g_pendingKeyPressed = false; // reset for each new key event
 
         // Translate GLFW code -> Java KeyEvent.VK_* value (Processing reference standard)
         keyCode = glfw_to_java_keycode(k);
@@ -1626,15 +1649,28 @@ static void key_cb(GLFWwindow* w, int k, int /*scancode*/, int action, int /*mod
                 key = (char)CODED;
                 break;
             default:
-                // Printable key: char_cb will fire next and set key correctly
-                // (with shift/caps/layout applied). Don't overwrite key here.
+                // Printable key: if a modifier (Ctrl/Alt) is held, char_cb will
+                // NOT fire on Windows for Ctrl+letter combos. Fire immediately.
+                // If no modifier, defer to char_cb so key gets the correct char.
+                if (mods & (GLFW_MOD_CONTROL | GLFW_MOD_ALT)) {
+                    // Control combo: key = the letter (uppercase, layout-independent)
+                    if (k >= GLFW_KEY_A && k <= GLFW_KEY_Z)
+                        key = (char)('a' + (k - GLFW_KEY_A));
+                    g_pendingKeyPressed = false; // fire immediately
+                } else {
+                    g_pendingKeyPressed = true; // wait for char_cb
+                }
                 break;
         }
 
-        if (_onKeyPressed) _onKeyPressed();
+        // Fire keyPressed() now unless deferred to char_cb
+        if (!g_pendingKeyPressed) {
+            if (_onKeyPressed) _onKeyPressed();
+        }
 
     } else if (action == GLFW_RELEASE) {
-        isKeyPressed = false;
+        _keyPressed = false;
+        g_currentMods = mods; // update on release too
         if (_onKeyReleased) _onKeyReleased();
     }
 }
@@ -1700,13 +1736,6 @@ void run(){
 
     settings();
 
-    // Pre-pass: call setup() with sizeOnly mode so size() stores dimensions
-    // without needing a GL context. This lets the window be created at the
-    // correct size immediately, avoiding the 100x100 -> resize -> stale-framebuffer bug.
-    _sizeOnlyMode = true;
-    setup();
-    _sizeOnlyMode = false;
-
     glfwWindowHint(GLFW_RESIZABLE,isResizable?GLFW_TRUE:GLFW_FALSE);
     glfwWindowHint(GLFW_SAMPLES,4);
     glfwWindowHint(GLFW_STENCIL_BITS,8);  // needed for concave shape fill
@@ -1739,6 +1768,17 @@ void run(){
     setProjection(winWidth,winHeight);
     {int fw,fh;glfwGetFramebufferSize(gWindow,&fw,&fh);pixelWidth=fw;pixelHeight=fh;}
 
+    // Enable sticky keys/buttons: GLFW will keep state as PRESSED until polled,
+    // Clear both buffers once at startup so the sketch starts with
+    // a known clean state (no GPU garbage in either buffer).
+    glClearColor(0,0,0,1);
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    glfwSwapBuffers(gWindow);
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+
+    // preventing missed inputs on Windows where events can arrive between polls.
+    glfwSetInputMode(gWindow, GLFW_STICKY_KEYS, GLFW_TRUE);
+    glfwSetInputMode(gWindow, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
     glfwSetCursorPosCallback(gWindow,   cursor_pos_cb);
     glfwSetMouseButtonCallback(gWindow, mouse_btn_cb);
     glfwSetScrollCallback(gWindow,      scroll_cb);
@@ -1759,29 +1799,27 @@ void run(){
         std::cerr << "[font] default.ttf not found -- using bitmap fallback\n";
     }
 
+    glfwFocusWindow(gWindow);  // ensure input focus on Windows
     setup();
 
-    // Auto-wire Java-style event callbacks.
-#if defined(__GNUC__) && !defined(_WIN32)
-    // Linux/macOS: weak symbol nullptr check skips unimplemented callbacks.
-    if((void*)::Processing::keyPressed   != nullptr) _onKeyPressed   = ::Processing::keyPressed;
-    if((void*)::Processing::keyReleased  != nullptr) _onKeyReleased  = ::Processing::keyReleased;
-    if((void*)::Processing::keyTyped     != nullptr) _onKeyTyped     = ::Processing::keyTyped;
-    if((void*)::Processing::mousePressed != nullptr) _onMousePressed = ::Processing::mousePressed;
-    if((void*)::Processing::mouseReleased!= nullptr) _onMouseReleased= ::Processing::mouseReleased;
-    if((void*)::Processing::mouseClicked != nullptr) _onMouseClicked = ::Processing::mouseClicked;
-    if((void*)::Processing::mouseMoved   != nullptr) _onMouseMoved   = ::Processing::mouseMoved;
-    if((void*)::Processing::mouseDragged != nullptr) _onMouseDragged = ::Processing::mouseDragged;
-    if((void*)::Processing::mouseWheel   != nullptr) _onMouseWheel   = ::Processing::mouseWheel;
-    if((void*)::Processing::windowMoved  != nullptr) _onWindowMoved  = ::Processing::windowMoved;
-    if((void*)::Processing::windowResized!= nullptr) _onWindowResized= ::Processing::windowResized;
-#else
-    // Windows: call the wire function if the IDE/sketch registered one.
-    // IDE.cpp sets _wireCallbacksFn = wireCallbacks before calling run().
+    // wireCallbacks() is generated by the IDE into Sketch_run.cpp.
+    // It assigns only the _on* pointers for callbacks the sketch actually defines.
+    // This avoids undefined reference errors from taking addresses of
+    // unimplemented functions. _wireCallbacksFn is set before run() is called.
     if (_wireCallbacksFn) _wireCallbacksFn();
-#endif
 
-    redrawOnce=true;
+    // Re-apply the correct 2D projection after setup() finishes.
+    // setup() may have called size() which sets the projection, but any
+    // subsequent GL calls in setup() might have left a different matrix active.
+    // This ensures the correct ortho is always set before the main loop.
+    if (!defaultP3D) setProjection(winWidth, winHeight);
+
+    // If setup() called noLoop(), don't run a draw() frame -- just swap once
+    // to show what setup() drew, then enter the event-only loop.
+    if (!looping) {
+        glfwSwapBuffers(gWindow);
+    }
+    redrawOnce = looping; // only trigger a draw frame if we're actually looping
     auto last=std::chrono::steady_clock::now();
     while(!glfwWindowShouldClose(gWindow)){
         pmouseX=mouseX;pmouseY=mouseY;
@@ -1796,8 +1834,9 @@ void run(){
                 glDisable(GL_CULL_FACE);
                 glFrontFace(GL_CW);
                 glEnable(GL_NORMALIZE);
-                glClearColor(bgR, bgG, bgB, bgA);
-                glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                // Do NOT clear color here -- the sketch calls background() itself.
+                // Clearing color would erase anything drawn in setup().
+                glClear(GL_DEPTH_BUFFER_BIT);
                 // Auto-apply the default Processing camera BEFORE draw() --
                 // matches Java Processing behaviour exactly. The sketch can
                 // override by calling camera() / perspective() itself.
@@ -1816,8 +1855,16 @@ void run(){
                 glMatrixMode(GL_MODELVIEW); glLoadIdentity();
                 glDisable(GL_DEPTH_TEST);
                 glDisable(GL_LIGHTING);
-                glClearColor(bgR, bgG, bgB, bgA);
-                glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                // Copy front buffer -> back buffer so incremental drawing
+                // (sketches that don't call background() every frame) accumulates
+                // correctly across frames without flickering.
+                // Sketches that DO call background() will overwrite this anyway.
+                // Do not auto-clear color -- the sketch calls background() itself.
+                // Sketches that draw incrementally (without background() each frame)
+                // will accumulate in the back buffer naturally across frames.
+                // Note: double-buffering means alternating back buffers -- sketches
+                // needing true frame accumulation should use a PGraphics offscreen buffer.
+                glClear(GL_DEPTH_BUFFER_BIT);
             }
 
             // Reset all light slots each frame so lights from the previous
